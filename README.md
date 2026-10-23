@@ -20,7 +20,7 @@ PR 상태를 Slack 알림 대신 **Claude Code 입력창 바로 위**에 띄우�
 - macOS (launchd, `caffeinate`, `open` 을 쓴다)
 - Python 3.10+ (표준 라이브러리만 쓴다), git, [GitHub CLI](https://cli.github.com/) 로그인(`gh auth login`)
 - [Claude Code](https://claude.com/claude-code) — `/code-review` 스킬과 mod(hooks module)를 지원하는 버전
-- 선택: `terminal-notifier` (알림 클릭으로 PR 열기), Orca 또는 Ghostty (리뷰 세션 탭)
+- 선택: `terminal-notifier` (알림 클릭으로 PR 열기), Orca (리뷰 세션 탭)
 
 ## 설치
 
@@ -65,7 +65,7 @@ claude plugin install review-buttons@pr-action-bar
 | `release_pr_authors`, `release_pr_title_pattern` | | CI 봇이 여는 릴리스 머지 PR. 리뷰하지 않고 왜 막혔는지만 띄운다 |
 | `pause_minutes` | `30` | 사용 한도·네트워크·로그인 문제일 때 전체 리뷰를 쉬는 시간 |
 | `notify_every_hours` | `3` | 같은 종류의 "쉬는 중" 알림 간격 |
-| `terminal` | `none` | `none` · `orca` · `ghostty` (아래 참고) |
+| `terminal` | `none` | `none` · `orca` (아래 참고) |
 | `language` | `ko` | 리뷰 정리 언어 |
 | `issue_url_template` | `""` | This PR 줄의 이슈 링크. 예: `https://your-team.atlassian.net/browse/{key}` |
 
@@ -95,7 +95,6 @@ PR 번호에 마우스를 올리면 주황(Claude 세션이 열림) 또는 흰�
 |---|---|---|
 | `none` | 알림만 | PR 페이지 |
 | `orca` | 그 PR worktree 에 `claude --resume` 탭을 포커스 없이 열어 둔다 | 그 탭으로 이동, 닫혔으면 세션을 이어 새로 연다 |
-| `ghostty` | 아무것도 안 한다 (AppleScript 로 열면 앱이 앞으로 튀어나와서) | 새 창에서 세션을 이어 연다 (손쉬운 사용 권한 필요) |
 
 터미널 앱 호출에는 짧은 타임아웃(`terminal_timeout_seconds`)이 있어서 앱이 응답하지 않아도 폴러와 띠 클릭이 멈추지 않는다.
 

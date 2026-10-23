@@ -58,7 +58,7 @@ DEFAULT_CONFIG = {
     "release_pr_title_pattern": r"^(Merge|Release|chore\(release\))",
     "pause_minutes": 30,
     "notify_every_hours": 3,
-    "terminal": "none",  # none | orca | ghostty
+    "terminal": "none",  # none | orca
     "terminal_timeout_seconds": 5,
     "language": "ko",
     # This PR 줄의 이슈 키 링크. 예: "https://your-team.atlassian.net/browse/{key}"
@@ -685,7 +685,6 @@ def check_replies(cfg: dict, state: dict, me: str, repo: str, repo_dir: str, pr:
 
 # ───────────────────────── 터미널 연동 ─────────────────────────
 # orca: CLI 로 탭을 포커스 없이 미리 열고, 누르면 그 탭으로 간다.
-# ghostty: AppleScript 로 열면 앱이 앞으로 튀어나오므로 누를 때만 연다.
 # none: 미리 열지 않고, 누르면 PR 페이지를 연다.
 
 
@@ -753,14 +752,6 @@ def open_in_terminal(cfg: dict, cwd: Path, command: str, title: str) -> bool:
             return orca(cfg, "terminal", "switch", "--terminal", tab["handle"]) is not None
         return orca(cfg, "terminal", "create", "--worktree", f"path:{cwd}", "--title", title,
                     "--command", command, "--focus") is not None
-    if cfg["terminal"] == "ghostty":
-        script = (f'tell application "Ghostty" to activate\n'
-                  f'tell application "System Events" to keystroke "n" using command down\n'
-                  f'delay 0.4\n'
-                  f'tell application "System Events" to keystroke {json.dumps(f"cd {cwd} && {command}")}\n'
-                  f'tell application "System Events" to key code 36')
-        p = tcall(cfg, ["/usr/bin/osascript", "-e", script])
-        return bool(p and p.returncode == 0)
     return False
 
 
