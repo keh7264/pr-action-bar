@@ -1,0 +1,11 @@
+{
+  "name": "pr-action-bar",
+  "owner": { "name": "keh7264" },
+  "plugins": [
+    {
+      "name": "review-buttons",
+      "source": "./review-buttons",
+      "description": "Claude Code 입력창 위에 내 PR·팀 PR 의 할 일을 띄우는 띠"
+    }
+  ]
+}

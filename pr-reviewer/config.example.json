@@ -1,0 +1,19 @@
+{
+  "repos": {
+    "repo-a": "~/workspace/repo-a",
+    "repo-b": "~/workspace/repo-b"
+  },
+  "effort": "high",
+  "timeout_minutes": 40,
+  "max_attempts": 2,
+  "skip_authors": [],
+  "bot_pr_markers": [],
+  "release_pr_authors": ["github-actions", "github-actions[bot]"],
+  "release_pr_title_pattern": "^(Merge|Release|chore\\(release\\))",
+  "pause_minutes": 30,
+  "notify_every_hours": 3,
+  "terminal": "none",
+  "terminal_timeout_seconds": 5,
+  "language": "ko",
+  "issue_url_template": ""
+}

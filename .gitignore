@@ -1,0 +1,4 @@
+__pycache__/
+.DS_Store
+review-buttons/.claude-plugin/types/
+node_modules/

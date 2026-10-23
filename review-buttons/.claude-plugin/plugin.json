@@ -1,0 +1,7 @@
+{
+  "name": "review-buttons",
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Claude Code 입력창 위에 내 PR·팀 PR 의 할 일을 띄우는 띠 (pr-reviewer 의 status.json 을 읽는다)",
+  "types": "./types/index.d.ts"
+}
