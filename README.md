@@ -30,9 +30,9 @@ PR 상태를 Slack 알림 대신 **Claude Code 입력창 바로 위**에 띄우�
 | 하는 일 | 5분마다 GitHub 상태만 받아 띠에 띄운다 | 그에 더해 새 PR 을 미리 리뷰하고 답글도 리뷰해 둔다 |
 | 필요한 것 | python3, git, gh | 그에 더해 claude (`/code-review`) |
 | Claude 사용량 | 없음 | PR 마다 리뷰 1회 + 답글 |
-| PR 을 누르면 | 내 PR 은 작업하던 탭(Orca) 또는 PR 페이지, 남의 PR 은 PR 페이지 | 남의 PR 은 리뷰 세션 탭 |
+| PR 을 누르면 | 내 PR 은 작업하던 탭(`terminal: orca`) 또는 PR 페이지, 남의 PR 은 PR 페이지 | 남의 PR 은 `terminal: orca` 면 리뷰 세션 탭, 아니면 PR 페이지 |
 
-어느 쪽이든 GitHub 조회는 폴러 한 곳에서만 하고 mod 는 `status.json` 만 읽는다. 그래서 띠만 쓸 때도 pr-reviewer 를 설치한다. 나중에 `auto_review` 를 `true` 로 바꾸면 그때부터 올라오는 PR 을 리뷰한다.
+어느 쪽이든 GitHub 조회는 폴러 한 곳에서만 하고 mod 는 `status.json` 만 읽는다. 그래서 띠만 쓸 때도 pr-reviewer 를 설치한다. 띠만 쓰는 동안 열린 PR 은 "본 것"으로 기록되므로, 나중에 `auto_review` 를 `true` 로 바꾸면 그때부터 새로 올라오는 PR 만 리뷰한다. 끄는 동안에도 닫힌 PR 의 worktree 정리는 계속 한다.
 
 ## 설치
 

@@ -200,6 +200,9 @@ def load_config() -> dict:
     cfg = dict(DEFAULT_CONFIG)
     cfg.update(read_json(CONFIG, {}))
     cfg["repos"] = {k: str(Path(v).expanduser()) for k, v in cfg["repos"].items()}
+    # "false" 같은 문자열을 참으로 읽지 않게 한다
+    flag = cfg["auto_review"]
+    cfg["auto_review"] = flag if isinstance(flag, bool) else str(flag).strip().lower() in ("true", "1", "yes")
     return cfg
 
 
@@ -814,7 +817,7 @@ def team_action(pr: dict, me: str, ps: dict, repo_seen: bool = True) -> str:
         return "Approved by others"
     # 새로 올라온 PR 은 리뷰가 끝나기 전에도 바로 보인다. 첫 폴링 전 레포의 PR 은 자동 리뷰 대상이 아니다
     waiting = not ps.get("reviewed_at") and not ps.get("seen_only") and not ps.get("gave_up")
-    if ps.get("reviewing_since") or (repo_seen and waiting):
+    if repo_seen and (ps.get("reviewing_since") or waiting):
         return "Reviewing"
     return "Needs review"
 
@@ -876,7 +879,7 @@ def opens_for(cfg: dict, repo: str, repo_dir: str, pr: dict, mine: bool, action:
         if cfg["terminal"] != "none" and orca_worktree_for_branch(cfg, repo_dir, pr["headRefName"]):
             return "session", None
         return "url", pr["url"]
-    if cfg["terminal"] != "none" and ps.get("session_id") and worktree_path(repo, pr["number"]).exists():
+    if cfg["auto_review"] and cfg["terminal"] != "none" and ps.get("session_id") and worktree_path(repo, pr["number"]).exists():
         return "session", None
     return "url", pr["url"]
 
@@ -918,7 +921,7 @@ def build_status(cfg: dict, state: dict) -> dict:
             if action:
                 items.append(entry)
     status = {"updated_at": iso(), "me": me, "python": cfg.get("paths", {}).get("python3", sys.executable), "items": items, "prs": prs, "git_dirs": git_dirs,
-              "paused_until": state.get("paused_until") if paused(state) else None, "errors": errors}
+              "paused_until": state.get("paused_until") if cfg["auto_review"] and paused(state) else None, "errors": errors}
     return status
 
 
@@ -974,10 +977,15 @@ def poll_locked(cfg: dict, state: dict) -> None:
     try:
         me = my_login(cfg, state)
     except Transient as e:
-        pause(cfg, state, e)
+        if cfg["auto_review"]:
+            pause(cfg, state, e)
+        else:
+            log(f"GitHub 조회 실패: {short_error(e)}")
         return
     if not cfg["auto_review"]:
-        return  # 띠만 쓰는 모드: 상태 파일은 poll() 이 끝에서 쓴다
+        # 띠만 쓰는 모드에서는 쉴 리뷰가 없다
+        state.pop("paused_until", None)
+        state.pop("pause_kind", None)
     for repo, repo_dir in cfg["repos"].items():
         if paused(state):
             log(f"쉬는 중({state.get('pause_kind')}) — {state['paused_until']} 까지")
@@ -1000,6 +1008,12 @@ def poll_locked(cfg: dict, state: dict) -> None:
             continue
         for pr in prs:
             ps = pr_state(state, repo, pr["number"])
+            if not cfg["auto_review"]:
+                # 리뷰만 끈다. 그사이 열린 PR 은 본 것으로 기록해 나중에 다시 켜도 한꺼번에 리뷰하지 않는다
+                if not ps.get("reviewed_at"):
+                    ps.setdefault("seen_only", iso())
+                ps.pop("reviewing_since", None)
+                continue
             try:
                 if should_review(cfg, me, pr, ps):
                     review_pr(cfg, state, repo, repo_dir, pr)
@@ -1051,7 +1065,7 @@ def open_pr(repo: str, number: int, mine: bool) -> int:
             return 0
     ps = state.get("repos", {}).get(repo, {}).get("prs", {}).get(str(number), {})
     wt = worktree_path(repo, number)
-    if not mine and ps.get("session_id") and wt.exists():
+    if not mine and cfg["auto_review"] and ps.get("session_id") and wt.exists():
         if open_in_terminal(cfg, wt, f"claude --resume {ps['session_id']}", f"{repo}#{number}"):
             return 0
     if url:
@@ -1144,7 +1158,8 @@ def install() -> int:
         print(f"{CONFIG} 를 만들었다. repos 를 채우고 다시 install 하라")
         return 1
     paths = cfg.setdefault("paths", {})
-    for name in ("python3", "git", "gh", "claude", "node", "orca"):
+    names = ("python3", "git", "gh", "claude", "node", "orca") if cfg["auto_review"] else ("python3", "git", "gh", "orca")
+    for name in names:
         current = paths.get(name)
         if not current or not Path(current).exists():
             found = resolve_stable(shutil.which(name))
