@@ -114,7 +114,14 @@ PR 번호에 마우스를 올리면 주황(Claude 세션이 열림) 또는 흰�
 
 답글이 달리면 열린 리뷰 탭의 **입력창이 비어 있을 때만** 프롬프트를 한 줄로 합쳐 보낸다. 쓰다 만 글이 있으면 다음 폴링으로 미룬다. 탭이 없으면 원래 세션을 갈라서(`--fork-session`) 헤드리스로 돌린다.
 
-> **Orca 주의**: `orca terminal create --worktree path:<경로>` 는 Orca 가 아는 worktree 여야 한다. 리뷰 worktree(`~/.pr-reviewer/wt/…`)가 Orca 에 등록돼 있지 않으면 탭 열기가 실패하고 PR 페이지로 대신 연다.
+> **Orca 설정**: 리뷰 worktree(`~/.pr-reviewer/wt/…`)는 Orca 가 만든 게 아니라서, 그대로면 탭 열기가 실패하고 PR 페이지로 대신 연다. 레포를 Orca 에 등록하고 바깥 worktree 도 보이게 해 두면 열린다.
+>
+> ```sh
+> orca repo add --path ~/work/app
+> orca repo set --repo path:$HOME/work/app --external-worktree-visibility show
+> ```
+>
+> 처음 여는 리뷰 탭에서는 Claude Code 가 폴더를 신뢰할지 한 번 묻는다.
 
 ## 이렇게 버틴다
 
