@@ -3,6 +3,7 @@
     "repo-a": "~/workspace/repo-a",
     "repo-b": "~/workspace/repo-b"
   },
+  "auto_review": true,
   "effort": "high",
   "timeout_minutes": 40,
   "max_attempts": 2,

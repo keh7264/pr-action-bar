@@ -22,6 +22,18 @@ PR 상태를 Slack 알림 대신 **Claude Code 입력창 바로 위**에 띄우�
 - [Claude Code](https://claude.com/claude-code) — `/code-review` 스킬과 mod(hooks module)를 지원하는 버전
 - 선택: `terminal-notifier` (알림 클릭으로 PR 열기), Orca (리뷰 세션 탭)
 
+## 두 가지 쓰는 법
+
+| | 띠만 쓰기 | 띠 + 자동 리뷰 |
+|---|---|---|
+| 설정 | `"auto_review": false` | `"auto_review": true` (기본값) |
+| 하는 일 | 5분마다 GitHub 상태만 받아 띠에 띄운다 | 그에 더해 새 PR 을 미리 리뷰하고 답글도 리뷰해 둔다 |
+| 필요한 것 | python3, git, gh | 그에 더해 claude (`/code-review`) |
+| Claude 사용량 | 없음 | PR 마다 리뷰 1회 + 답글 |
+| PR 을 누르면 | 내 PR 은 작업하던 탭(Orca) 또는 PR 페이지, 남의 PR 은 PR 페이지 | 남의 PR 은 리뷰 세션 탭 |
+
+어느 쪽이든 GitHub 조회는 폴러 한 곳에서만 하고 mod 는 `status.json` 만 읽는다. 그래서 띠만 쓸 때도 pr-reviewer 를 설치한다. 나중에 `auto_review` 를 `true` 로 바꾸면 그때부터 올라오는 PR 을 리뷰한다.
+
 ## 설치
 
 ### 1. pr-reviewer
@@ -30,13 +42,13 @@ PR 상태를 Slack 알림 대신 **Claude Code 입력창 바로 위**에 띄우�
 git clone https://github.com/keh7264/pr-action-bar.git
 cd pr-action-bar
 python3 pr-reviewer/pr-reviewer.py install   # 처음엔 ~/.pr-reviewer/config.json 만 만들고 멈춘다
-$EDITOR ~/.pr-reviewer/config.json            # repos 에 리뷰할 레포의 로컬 경로를 적는다
+$EDITOR ~/.pr-reviewer/config.json            # repos 에 레포의 로컬 경로를 적는다 (띠만 쓰면 auto_review: false)
 python3 pr-reviewer/pr-reviewer.py install   # 점검 → 복사 → launchd 등록
 ```
 
 `install` 이 하는 일:
 
-- `claude`·`gh`·`git`·`node` 의 **절대 경로**를 찾아 설정에 적는다. launchd 는 로그인 셸 PATH 를 받지 않아서 nvm·fnm 으로 깐 claude 를 못 찾는다. fnm 이 셸마다 만드는 임시 경로(`fnm_multishells/…`)는 기본 버전 경로로 바꿔 적는다.
+- `gh`·`git` (자동 리뷰를 쓰면 `claude`·`node` 도) 의 **절대 경로**를 찾아 설정에 적는다. launchd 는 로그인 셸 PATH 를 받지 않아서 nvm·fnm 으로 깐 claude 를 못 찾는다. fnm 이 셸마다 만드는 임시 경로(`fnm_multishells/…`)는 기본 버전 경로로 바꿔 적는다.
 - 점검: 각 도구 실행, `gh auth status`, 레포마다 비밀번호 없이 `git ls-remote`(타임아웃 15초, VPN 확인용).
 - 스크립트를 `~/.pr-reviewer/bin/` 에 복사해 두고 launchd 는 그 복사본을 실행한다. 레포를 업데이트한 뒤에는 `install` 을 다시 돌린다.
 - 리뷰가 도는 중이면 launchd 등록 변경을 미룬다.
@@ -56,6 +68,7 @@ claude plugin install review-buttons@pr-action-bar
 
 | 키 | 기본값 | 설명 |
 |---|---|---|
+| `auto_review` | `true` | `false` 면 띠만 쓴다. 리뷰·worktree·답글 리뷰를 하지 않는다 |
 | `repos` | `{}` | `{"짧은이름": "로컬 경로"}`. 짧은 이름이 띠에 `repo-a#1234` 처럼 붙는다 |
 | `effort` | `high` | `/code-review` 에 넘길 레벨 |
 | `timeout_minutes` | `40` | 리뷰 한 단계의 시간 제한 |

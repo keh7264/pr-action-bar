@@ -46,6 +46,8 @@ PLIST = HOME / "Library/LaunchAgents" / f"{LABEL}.plist"
 
 DEFAULT_CONFIG = {
     "repos": {},
+    # false 면 띠만 쓴다: GitHub 상태만 계산해 status.json 을 쓰고 리뷰·worktree·답글 리뷰는 하지 않는다
+    "auto_review": True,
     "effort": "high",
     "timeout_minutes": 40,
     # 같은 커밋 max_attempts 회, PR 전체 2*max_attempts 회 실패하면 자동 리뷰를 멈춘다
@@ -904,7 +906,8 @@ def build_status(cfg: dict, state: dict) -> dict:
             elif pr["isDraft"]:
                 action = None  # 남의 Draft 는 아직 리뷰할 단계가 아니다
             else:
-                action = team_action(pr, me, ps, bool(state.get("repos", {}).get(repo, {}).get("seen_initial")))
+                reviewing = cfg["auto_review"] and bool(state.get("repos", {}).get(repo, {}).get("seen_initial"))
+                action = team_action(pr, me, ps, reviewing)
             opens, page_url = opens_for(cfg, repo, repo_dir, pr, mine, action or "", ps)
             entry = {
                 "repo": repo, "short": repo, "number": pr["number"], "url": pr["url"], "title": pr["title"],
@@ -973,6 +976,8 @@ def poll_locked(cfg: dict, state: dict) -> None:
     except Transient as e:
         pause(cfg, state, e)
         return
+    if not cfg["auto_review"]:
+        return  # 띠만 쓰는 모드: 상태 파일은 poll() 이 끝에서 쓴다
     for repo, repo_dir in cfg["repos"].items():
         if paused(state):
             log(f"쉬는 중({state.get('pause_kind')}) — {state['paused_until']} 까지")
@@ -1075,7 +1080,9 @@ def resolve_stable(path: str | None) -> str | None:
 def doctor(cfg: dict | None = None) -> list[str]:
     cfg = cfg or load_config()
     problems = []
-    for name in ("python3", "git", "gh", "claude", "node"):
+    # 띠만 쓰면 claude 는 필요 없다
+    names = ("python3", "git", "gh", "claude", "node") if cfg["auto_review"] else ("python3", "git", "gh")
+    for name in names:
         exe = cfg.get("paths", {}).get(name) or shutil.which(name)
         if not exe or not Path(exe).exists():
             problems.append(f"{name}: 찾지 못함")
