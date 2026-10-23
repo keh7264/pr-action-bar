@@ -69,7 +69,7 @@ async function loadStatus($: EngineInterface) {
 async function findThisPr($: EngineInterface): Promise<Pr | null> {
   const { prs, gitDirs } = await read($, status)
   const cwd = await $.session.cwd()
-  const reviewTree = /\/\.pr-reviewer\/wt\/(.+)-(\d+)(?:\/|$)/.exec(cwd)
+  const reviewTree = /\/\.pr-reviewer\/wt\/([^/]+)-(\d+)(?:\/|$)/.exec(cwd)
   if (reviewTree) {
     return prs.find(p => p.repo === reviewTree[1] && p.number === Number(reviewTree[2])) ?? null
   }
@@ -80,7 +80,8 @@ async function findThisPr($: EngineInterface): Promise<Pr | null> {
     ])
     if (gitDir.exitCode !== 0 || branch.exitCode !== 0) return null
     const repo = Object.entries(gitDirs).find(([, dir]) => dir === gitDir.stdout.trim())?.[0]
-    return prs.find(p => p.repo === repo && p.branch === branch.stdout.trim()) ?? null
+    // 포크에서 온 PR 은 브랜치 이름이 같아도 내 브랜치가 아니다
+    return prs.find(p => p.repo === repo && !p.cross_repo && p.branch === branch.stdout.trim()) ?? null
   } catch {
     return null
   }
@@ -226,9 +227,7 @@ export const register: Register = on => {
                 label={`[ ${current.action} ]`}
                 plain
                 hover={{ underline: true }}
-                onPress={() =>
-                  void openUrl($, current.action === 'Fix CI' || current.action === 'CI running' ? `${current.url}/checks` : current.url)
-                }
+                onPress={() => void openUrl($, current.page_url ?? current.url)}
               />
             </Box>
             <Box key="frame-this-title" flexShrink={1}>

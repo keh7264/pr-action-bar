@@ -230,11 +230,13 @@ def run(argv: list[str], *, cwd: str | None = None, timeout: float = 120, check:
     return p
 
 
+# 숫자는 HTTP 상태로 쓰인 경우만 본다. PR #4290 같은 번호를 한도 초과로 오인하지 않게
+_HTTP = r"(?:http|status|error|code)[^a-z0-9\n]{0,4}"
 TRANSIENT_PATTERNS = [
-    ("limit", r"rate limit|usage limit|limit reached|429|overloaded|529"),
-    ("network", r"could not resolve host|connection (refused|reset|timed out)|network is unreachable"
-                r"|failed to connect|temporary failure in name resolution|ssl|tls handshake|502|503|504"),
-    ("auth", r"authentication|not logged in|gh auth login|invalid api key|401|credit balance|oauth token"),
+    ("limit", rf"rate limit|usage limit|limit reached|overloaded|{_HTTP}(?:429|529)\b"),
+    ("network", rf"could not resolve host|connection (refused|reset|timed out)|network is unreachable"
+                rf"|failed to connect|temporary failure in name resolution|\bssl\b|tls handshake|{_HTTP}50[234]\b"),
+    ("auth", rf"authentication|not logged in|gh auth login|invalid api key|credit balance|oauth token|{_HTTP}401\b"),
 ]
 
 
@@ -460,6 +462,10 @@ def claude_args(cfg: dict) -> list[str]:
     ]
 
 
+HEARTBEAT_SECONDS = 300
+_heartbeat = None  # 긴 claude 실행 중 주기적으로 부를 함수 (status.json 갱신)
+
+
 @contextlib.contextmanager
 def stay_awake():
     """리뷰하는 동안 유휴 잠자기를 막는다. -w 라서 이 프로세스가 죽으면 caffeinate 도 끝난다."""
@@ -481,9 +487,26 @@ def claude(cfg: dict, cwd: Path, text: str, *, resume: str | None = None, fork: 
         if fork:
             argv.append("--fork-session")
     timeout = (timeout_minutes or cfg["timeout_minutes"]) * 60
-    p = subprocess.run(argv, cwd=cwd, timeout=timeout, capture_output=True, text=True,
-                       env={**os.environ, "PATH": f"{Path(tool(cfg, 'node')).parent}:{os.environ.get('PATH', '')}"}
-                       if cfg.get("paths", {}).get("node") else None)
+    env = ({**os.environ, "PATH": f"{Path(tool(cfg, 'node')).parent}:{os.environ.get('PATH', '')}"}
+           if cfg.get("paths", {}).get("node") else None)
+    with tempfile.TemporaryFile("w+") as fout, tempfile.TemporaryFile("w+") as ferr:
+        proc = subprocess.Popen(argv, cwd=cwd, stdout=fout, stderr=ferr, text=True, env=env)
+        deadline = time.time() + timeout
+        while True:
+            try:
+                proc.wait(timeout=min(HEARTBEAT_SECONDS, max(1, deadline - time.time())))
+                break
+            except subprocess.TimeoutExpired:
+                if time.time() >= deadline:
+                    proc.kill()
+                    proc.wait()
+                    raise subprocess.TimeoutExpired(argv[:1], timeout)
+                # launchd 는 실행 중인 작업을 겹쳐 띄우지 않는다. 리뷰가 길어도 띠의 상태가 낡지 않게 여기서 갱신한다
+                if _heartbeat:
+                    _heartbeat()
+        fout.seek(0)
+        ferr.seek(0)
+        p = subprocess.CompletedProcess(argv, proc.returncode, fout.read(), ferr.read())
     try:
         out = json.loads(p.stdout)
     except json.JSONDecodeError:
@@ -512,12 +535,29 @@ def extract_json(text: str) -> dict | None:
 CATEGORY_ORDER = ["꼭 수정", "자잘한 수정", "넘겨도 됨"]
 
 
+def normalize_findings(data: dict) -> list[dict]:
+    """모델이 null·빈 문자열·이상한 타입을 섞어 보내도 렌더링이 죽지 않게 다듬는다."""
+    out = []
+    for f in data.get("findings") or []:
+        if not isinstance(f, dict):
+            out.append({"file": "?", "line": "?", "title": str(f), "comment": str(f), "category": "넘겨도 됨", "reason": ""})
+            continue
+        cat = f.get("category")
+        cat = cat.strip() if isinstance(cat, str) and cat.strip() else "넘겨도 됨"
+        out.append({
+            "file": str(f.get("file") or "?"), "line": f.get("line") if f.get("line") is not None else "?",
+            "title": str(f.get("title") or ""), "comment": str(f.get("comment") or ""),
+            "category": cat, "reason": str(f.get("reason") or ""),
+        })
+    return out
+
+
 def render_review(repo: str, pr: dict, data: dict | None, raw: str, session_id: str, wt: Path, seconds: int) -> str:
     counts = {c: 0 for c in CATEGORY_ORDER}
-    findings = (data or {}).get("findings", [])
+    findings = normalize_findings(data) if data else []
     for f in findings:
         counts[f.get("category", "넘겨도 됨")] = counts.get(f.get("category", "넘겨도 됨"), 0) + 1
-    tally = " · ".join(f"{k.split()[0]} {v}" for k, v in counts.items() if v) or "지적 없음"
+    tally = " · ".join(f"{k.split()[0] if k.split() else k} {v}" for k, v in counts.items() if v) or "지적 없음"
     lines = [
         f"# {repo}#{pr['number']} {pr['title']}",
         "",
@@ -530,7 +570,7 @@ def render_review(repo: str, pr: dict, data: dict | None, raw: str, session_id: 
         lines += ["> 정리 단계 결과가 형식에 맞지 않아 원문을 그대로 남긴다.", "", raw]
         return "\n".join(lines) + "\n"
     if data.get("summary"):
-        lines += ["## 요약", "", data["summary"], ""]
+        lines += ["## 요약", "", str(data["summary"]), ""]
     for cat in CATEGORY_ORDER + [c for c in counts if c not in CATEGORY_ORDER]:
         items = [f for f in findings if f.get("category", "넘겨도 됨") == cat]
         if not items:
@@ -602,7 +642,12 @@ def review_pr(cfg: dict, state: dict, repo: str, repo_dir: str, pr: dict) -> Non
     data = extract_json(raw)
     seconds = int(time.time() - started)
     out = REVIEWS / repo / f"{pr['number']}-{pr['headRefOid'][:9]}.md"
-    write_atomic(out, render_review(repo, pr, data, raw, sid, wt, seconds))
+    try:
+        text = render_review(repo, pr, data, raw, sid, wt, seconds)
+    except Exception as e:  # 끝난 리뷰를 렌더링 오류로 잃지 않는다
+        log(f"{repo}#{pr['number']} 리뷰 파일 렌더링 실패, 원문 저장: {short_error(e)}")
+        text = render_review(repo, pr, None, raw, sid, wt, seconds)
+    write_atomic(out, text)
     # 결과를 먼저 저장한다. 알림이나 터미널이 멈춰도 다음 폴링이 처음부터 다시 돌지 않게
     ps.update(reviewed_at=iso(), session_id=sid, review_file=str(out), reviewed_sha=pr["headRefOid"],
               seconds=seconds)
@@ -767,7 +812,7 @@ query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
     pullRequests(states: OPEN, first: 100) {
       nodes {
-        number title url isDraft headRefOid headRefName author { login } reviewDecision mergeable
+        number title url isDraft headRefOid headRefName isCrossRepository author { login } reviewDecision mergeable
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
         recent: commits(last: 30) { nodes { commit { oid parents(first: 2) { totalCount } } } }
         reviews(last: 50) { nodes { author { login } state submittedAt commit { oid } } }
@@ -834,7 +879,7 @@ def my_action(pr: dict, me: str, release: bool) -> str:
     unresolved = [t for t in pr["reviewThreads"]["nodes"] if not t["isResolved"]]
     last_authors = [((t["last"]["nodes"] or [{}])[0].get("author") or {}).get("login") for t in unresolved]
     ci = check_state(pr)
-    if any(a != me for a in last_authors) and not release:
+    if any(a and a != me and not is_bot(a) for a in last_authors) and not release:
         return "Reply"
     if pr["mergeable"] == "CONFLICTING":
         return "Resolve conflicts"
@@ -846,22 +891,31 @@ def my_action(pr: dict, me: str, release: bool) -> str:
         return "Awaiting re-review"
     if pr["reviewDecision"] == "CHANGES_REQUESTED":
         return "Address changes"
-    if not any(r["state"] == "APPROVED" for r in pr["reviews"]["nodes"]):
+    decision = pr["reviewDecision"]
+    # 필요한 승인 수는 브랜치 보호가 정한다. reviewDecision 이 없으면(보호 없음) 승인 1개를 기준으로 본다
+    if decision == "REVIEW_REQUIRED" or (decision is None and not any(r["state"] == "APPROVED" for r in pr["reviews"]["nodes"])):
         return "Awaiting approval"
     if ci == "PENDING":
         return "CI running"
     return "Merge"
 
 
+_cache: dict = {}  # 한 번의 상태 계산 동안만 쓰는 조회 결과
+
+
 def orca_worktree_for_branch(cfg: dict, repo_dir: str, branch: str) -> str | None:
     """터미널 앱(Orca)에 등록된 worktree 중 이 브랜치를 체크아웃한 곳 (같은 저장소인지까지 확인)."""
     if cfg["terminal"] != "orca":
         return None
-    data = orca(cfg, "worktree", "list") or {}
-    common = git(cfg, "rev-parse", "--path-format=absolute", "--git-common-dir", cwd=repo_dir, check=False).stdout.strip()
-    for w in data.get("worktrees", []):
+    if "orca_worktrees" not in _cache:
+        _cache["orca_worktrees"] = (orca(cfg, "worktree", "list") or {}).get("worktrees", [])
+    common = _cache.get(("git_dir", repo_dir))
+    if common is None:
+        common = git(cfg, "rev-parse", "--path-format=absolute", "--git-common-dir", cwd=repo_dir, check=False).stdout.strip()
+        _cache[("git_dir", repo_dir)] = common
+    for w in _cache["orca_worktrees"]:
         path = w.get("path")
-        if not path or w.get("branch", "").removeprefix("refs/heads/") != branch:
+        if not path or (w.get("branch") or "").removeprefix("refs/heads/") != branch:
             continue
         other = git(cfg, "rev-parse", "--path-format=absolute", "--git-common-dir", cwd=path, check=False).stdout.strip()
         if other == common:
@@ -885,6 +939,7 @@ def opens_for(cfg: dict, repo: str, repo_dir: str, pr: dict, mine: bool, action:
 
 
 def build_status(cfg: dict, state: dict) -> dict:
+    _cache.clear()
     me = my_login(cfg, state)
     items, prs, git_dirs = [], [], {}
     errors = []
@@ -909,12 +964,14 @@ def build_status(cfg: dict, state: dict) -> dict:
             elif pr["isDraft"]:
                 action = None  # 남의 Draft 는 아직 리뷰할 단계가 아니다
             else:
-                reviewing = cfg["auto_review"] and bool(state.get("repos", {}).get(repo, {}).get("seen_initial"))
+                # 실제로 리뷰될 PR 만 Reviewing 으로 띄운다 (skip 대상·보류·끈 상태는 Needs review)
+                reviewing = (cfg["auto_review"] and bool(state.get("repos", {}).get(repo, {}).get("seen_initial"))
+                             and author not in cfg["skip_authors"] and not ps.get("held"))
                 action = team_action(pr, me, ps, reviewing)
             opens, page_url = opens_for(cfg, repo, repo_dir, pr, mine, action or "", ps)
             entry = {
                 "repo": repo, "short": repo, "number": pr["number"], "url": pr["url"], "title": pr["title"],
-                "branch": pr["headRefName"], "action": action or "Open", "mine": mine, "opens": opens,
+                "branch": pr["headRefName"], "cross_repo": bool(pr.get("isCrossRepository")), "action": action or "Open", "mine": mine, "opens": opens,
                 "page_url": page_url, "review_file": ps.get("review_file"),
             }
             prs.append(entry)
@@ -928,7 +985,7 @@ def build_status(cfg: dict, state: dict) -> dict:
 def write_status_safely(cfg: dict, state: dict) -> None:
     try:
         write_json(STATUS, build_status(cfg, state))
-    except (Failed, Transient, subprocess.TimeoutExpired, OSError) as e:
+    except Exception as e:  # 상태 갱신 실패가 폴링 전체를 멈추지 않게 한다
         log(f"status.json 갱신 실패: {short_error(e)}")
 
 
@@ -965,6 +1022,8 @@ def poll() -> int:
             write_status_safely(cfg, state)
             return 0
         state = read_json(STATE, {})
+        global _heartbeat
+        _heartbeat = lambda: write_status_safely(cfg, state)
         try:
             poll_locked(cfg, state)
         finally:
@@ -1029,7 +1088,7 @@ def poll_locked(cfg: dict, state: dict) -> None:
                     ps.pop("transient_count", None)
                 pause(cfg, state, e)
                 return
-            except (Failed, subprocess.TimeoutExpired, OSError) as e:
+            except Exception as e:  # 예상 못 한 오류도 실패로 세서 같은 리뷰를 끝없이 다시 돌지 않게 한다
                 ps.pop("reviewing_since", None)
                 record_failure(cfg, state, repo, pr, ps, short_error(e))
             save_state(state)
@@ -1088,7 +1147,8 @@ def resolve_stable(path: str | None) -> str | None:
         for c in (default, alt):
             if c.exists():
                 return str(c)
-    return str(Path(path).resolve()) if Path(path).exists() else None
+    # 심볼릭 링크는 풀지 않는다. Homebrew Cellar 의 버전 경로는 업그레이드하면 사라진다
+    return path if Path(path).exists() else None
 
 
 def doctor(cfg: dict | None = None) -> list[str]:
