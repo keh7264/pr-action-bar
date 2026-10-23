@@ -33,7 +33,6 @@ const GROUPS = [
 ] as const
 const THIS_PR_COLOR = '#A66CFF'
 const JIRA_COLOR = '#4C9AFF'
-const ISSUE_KEY = /[A-Z][A-Z0-9]+-\d+/
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
@@ -167,7 +166,6 @@ export const register: Register = on => {
     if (!updatedAt && items.length === 0) return below
 
     const clickable = e.viewport?.isFullscreen !== false
-    const issue = current ? ISSUE_KEY.exec(current.branch)?.[0] ?? ISSUE_KEY.exec(current.title)?.[0] : undefined
     const hoverFor = (opens: string) => ({ underline: true, bold: true, color: opens === 'session' ? 'claude' : 'text' })
 
     return (
@@ -239,14 +237,14 @@ export const register: Register = on => {
                 onPress={() => void openUrl($, current.url)}
               />
             </Box>
-            {issue ? (
+            {current.issue_key && current.issue_url ? (
               <Box key="frame-this-issue">
                 <Button
                   key="this-issue"
-                  label={`[ ${issue} ]`}
+                  label={`[ ${current.issue_key} ]`}
                   plain
                   hover={{ underline: true, color: JIRA_COLOR }}
-                  onPress={() => void runScript($, ['--open-issue', issue])}
+                  onPress={() => void openUrl($, current.issue_url!)}
                 />
               </Box>
             ) : null}

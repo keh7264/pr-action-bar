@@ -14,6 +14,9 @@ export type Pr = {
   opens: 'session' | 'url'
   page_url: string | null
   review_file: string | null
+  /** 이슈 키와 링크. 설정에 issue_url_template 이 없거나 키가 없으면 null (버튼을 그리지 않는다) */
+  issue_key: string | null
+  issue_url: string | null
 }
 
 export type Status = {

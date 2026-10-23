@@ -16,5 +16,6 @@
   "terminal": "none",
   "terminal_timeout_seconds": 5,
   "language": "ko",
-  "issue_url_template": ""
+  "issue_url_template": "",
+  "issue_projects": []
 }

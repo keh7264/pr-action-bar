@@ -65,6 +65,8 @@ DEFAULT_CONFIG = {
     "language": "ko",
     # This PR 줄의 이슈 키 링크. 예: "https://your-team.atlassian.net/browse/{key}"
     "issue_url_template": "",
+    # 이슈 키로 인정할 프로젝트. 비우면 ABC-123 모양이면 다 인정한다 (UTF-8 같은 오인이 생길 수 있다)
+    "issue_projects": [],
     "paths": {},  # claude / gh / git / node 절대 경로 (install 이 채운다)
 }
 
@@ -938,6 +940,23 @@ def opens_for(cfg: dict, repo: str, repo_dir: str, pr: dict, mine: bool, action:
     return "url", pr["url"]
 
 
+ISSUE_KEY = re.compile(r"(?<![A-Za-z0-9])([A-Z][A-Z0-9]+)-(\d+)(?![A-Za-z0-9])")
+
+
+def issue_of(cfg: dict, branch: str, title: str) -> tuple[str | None, str | None]:
+    """브랜치 이름에서 먼저, 없으면 PR 제목에서 이슈 키를 찾는다. 템플릿이 없으면 링크를 만들지 않는다."""
+    tpl = cfg.get("issue_url_template")
+    if not tpl:
+        return None, None
+    projects = set(cfg.get("issue_projects") or [])
+    for text in (branch.upper(), title):
+        for m in ISSUE_KEY.finditer(text):
+            if not projects or m.group(1) in projects:
+                key = m.group(0)
+                return key, tpl.replace("{key}", key)
+    return None, None
+
+
 def build_status(cfg: dict, state: dict) -> dict:
     _cache.clear()
     me = my_login(cfg, state)
@@ -968,11 +987,13 @@ def build_status(cfg: dict, state: dict) -> dict:
                 reviewing = (cfg["auto_review"] and bool(state.get("repos", {}).get(repo, {}).get("seen_initial"))
                              and author not in cfg["skip_authors"] and not ps.get("held"))
                 action = team_action(pr, me, ps, reviewing)
+            issue_key, issue_url = issue_of(cfg, pr["headRefName"], pr["title"])
             opens, page_url = opens_for(cfg, repo, repo_dir, pr, mine, action or "", ps)
             entry = {
                 "repo": repo, "short": repo, "number": pr["number"], "url": pr["url"], "title": pr["title"],
                 "branch": pr["headRefName"], "cross_repo": bool(pr.get("isCrossRepository")), "action": action or "Open", "mine": mine, "opens": opens,
                 "page_url": page_url, "review_file": ps.get("review_file"),
+                "issue_key": issue_key, "issue_url": issue_url,
             }
             prs.append(entry)
             if action:
@@ -1270,18 +1291,10 @@ def main() -> int:
     ap.add_argument("--full", action="store_true")
     ap.add_argument("--open", nargs=2, metavar=("REPO", "NUMBER"))
     ap.add_argument("--mine", action="store_true")
-    ap.add_argument("--open-issue", metavar="KEY")
     args = ap.parse_args()
     try:
         if args.refresh:
             return refresh(args.full)
-        if args.open_issue:
-            tpl = load_config().get("issue_url_template")
-            if not tpl:
-                print("config.json 에 issue_url_template 이 없다", file=sys.stderr)
-                return 1
-            subprocess.run(["/usr/bin/open", tpl.replace("{key}", args.open_issue)], timeout=10)
-            return 0
         if args.open:
             return open_pr(args.open[0], int(args.open[1]), args.mine)
         if args.command == "install":

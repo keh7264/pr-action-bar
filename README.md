@@ -80,7 +80,8 @@ claude plugin install review-buttons@pr-action-bar
 | `notify_every_hours` | `3` | 같은 종류의 "쉬는 중" 알림 간격 |
 | `terminal` | `none` | `none` · `orca` (아래 참고) |
 | `language` | `ko` | 리뷰 정리 언어 |
-| `issue_url_template` | `""` | This PR 줄의 이슈 링크. 예: `https://your-team.atlassian.net/browse/{key}` |
+| `issue_url_template` | `""` | This PR 줄의 이슈 링크. 비워 두면 이슈 버튼을 그리지 않는다(Jira 를 안 쓰는 팀). 예: `https://your-team.atlassian.net/browse/{key}` |
+| `issue_projects` | `[]` | 이슈 키로 인정할 프로젝트(예: `["SHOP"]`). 비우면 `ABC-123` 모양이면 다 인정해서 `UTF-8` 같은 것도 걸릴 수 있다 |
 
 ### 프롬프트 바꾸기
 
