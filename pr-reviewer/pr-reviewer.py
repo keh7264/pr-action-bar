@@ -1402,7 +1402,7 @@ def setup() -> int:
         if auto:
             if not find_tool(paths, "claude"):
                 print("  claude 를 찾지 못했다. 설치한 뒤 다시 돌리거나, 리뷰 없이 띠만 쓰려면 n 으로 답하라")
-            print("  /code-review high 로 리뷰하고, 지적마다 실제로 터지는지 한 번 더 검증한 뒤에 알린다")
+            print(f"  /code-review {cfg['effort']} 로 리뷰하고, 지적마다 실제로 터지는지 한 번 더 검증한 뒤에 알린다")
         print()
         terminal = "none"
         if find_tool(paths, "orca"):
@@ -1428,7 +1428,7 @@ def setup() -> int:
         return 1
 
     base = read_json(CONFIG, {}) if not first else read_json(Path(__file__).with_name("config.example.json"), {})
-    base.update(repos=repos, auto_review=auto, effort="high", terminal=terminal,
+    base.update(repos=repos, auto_review=auto, terminal=terminal,
                 issue_url_template=tpl, issue_projects=projects, paths=paths)
     write_json(CONFIG, base)
     print(f"\n{CONFIG} 에 저장했다. 다른 값(skip_authors, bot_pr_markers …)은 이 파일에서 고친다")
