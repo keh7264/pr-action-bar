@@ -1210,7 +1210,7 @@ PLIST_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     <string>{python}</string>
     <string>{script}</string>
   </array>
-  <key>StartInterval</key><integer>300</integer>
+{env}  <key>StartInterval</key><integer>300</integer>
   <key>RunAtLoad</key><true/>
   <key>StandardOutPath</key><string>{logs}/launchd.out.log</string>
   <key>StandardErrorPath</key><string>{logs}/launchd.err.log</string>
@@ -1254,8 +1254,11 @@ def install() -> int:
             return 1
         PLIST.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(["/bin/launchctl", "unload", str(PLIST)], capture_output=True)
+        # 다른 폴더에 설치했으면 launchd 가 돌리는 쪽도 그 폴더를 보게 한다
+        env = ("  <key>EnvironmentVariables</key>\n  <dict><key>PR_REVIEWER_HOME</key>"
+               f"<string>{ROOT}</string></dict>\n") if "PR_REVIEWER_HOME" in os.environ else ""
         write_atomic(PLIST, PLIST_TEMPLATE.format(label=LABEL, python=paths.get("python3", sys.executable),
-                                                  script=target, logs=LOGS))
+                                                  script=target, logs=LOGS, env=env))
         LOGS.mkdir(parents=True, exist_ok=True)
         subprocess.run(["/bin/launchctl", "load", str(PLIST)], check=True)
     print(f"설치 완료. 5분마다 {target} 가 돈다. 로그: {LOGS}/pr-reviewer.log")
