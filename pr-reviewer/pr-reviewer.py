@@ -137,7 +137,7 @@ PR 이 무엇을 바꾸는지와 가장 큰 문제를 한두 문장으로.
 - **수정**: 어떻게 고치면 되는지. 코드는 바로 아래에 diff 코드블록으로
 - **이유**: 이렇게 분류한 이유와 확인한 발생 경로
 
-지적마다 `---` 로 나누고 ### 번호를 1부터 붙인다. 분류는 `꼭 수정`, `자잘한 수정`, `넘겨도 됨` 셋 중 하나만 쓰고 이 순서로 늘어놓는다.
+지적마다 `---` 로 나누고 ### 번호를 1부터 붙인다. 분류는 `꼭 수정`, `자잘한 수정`, `넘겨도 됨` 셋 중 하나만 쓰고 이 순서로 늘어놓는다. 분류 이름은 어느 언어로 쓰든 이 글자 그대로 쓴다.
 지적이 없으면 요약 뒤에 `지적 없음` 한 줄만 쓴다."""
 
 # ───────────────────────── 공통 유틸 ─────────────────────────
@@ -224,10 +224,15 @@ def load_config() -> dict:
     return cfg
 
 
+BREW_BINS = ("/opt/homebrew/bin", "/usr/local/bin")
+
+
 def find_tool(paths: dict, name: str) -> str | None:
-    """launchd 는 로그인 셸 PATH 를 받지 않으니 설정에 적힌 절대 경로를 먼저 쓴다."""
+    """launchd 는 로그인 셸 PATH 를 받지 않으니 설정에 적힌 절대 경로를 먼저 쓰고, Homebrew 자리도 본다."""
     p = paths.get(name)
-    return p if p and Path(p).exists() else shutil.which(name)
+    if p and Path(p).exists():
+        return p
+    return shutil.which(name, path=os.pathsep.join([os.environ.get("PATH", ""), *BREW_BINS]))
 
 
 def tool(cfg: dict, name: str) -> str:
@@ -546,7 +551,8 @@ CATEGORIES = ["꼭 수정", "자잘한 수정", "넘겨도 됨"]
 
 def render_review(repo: str, pr: dict, body: str, session_id: str, wt: Path, seconds: int) -> str:
     counts = {c: len(re.findall(rf"^`[^`\n]+`\s*·\s*{c}\s*$", body, re.M)) for c in CATEGORIES}
-    tally = " · ".join(f"{c.split()[0]} {n}" for c, n in counts.items() if n) or "지적 없음"
+    tally = (" · ".join(f"{c.split()[0]} {n}" for c, n in counts.items() if n)
+             or ("지적 없음" if "지적 없음" in body else "분류를 세지 못함 (본문 확인)"))
     lines = [
         f"# {repo}#{pr['number']} {pr['title']}",
         "",
@@ -609,6 +615,8 @@ def review_pr(cfg: dict, state: dict, repo: str, repo_dir: str, pr: dict) -> Non
         claude(cfg, wt, prompt("recheck_bot" if bot else "recheck"), resume=sid)
         lang = {"ko": "한국어", "en": "English"}.get(cfg["language"], cfg["language"])
         final = claude(cfg, wt, prompt("summarize_bot" if bot else "summarize", LANGUAGE=lang), resume=sid)
+    if not str(final.get("result", "")).strip():
+        raise Failed("리뷰 정리가 비어 있다")
     seconds = int(time.time() - started)
     out = REVIEWS / repo / f"{pr['number']}-{pr['headRefOid'][:9]}.md"
     text = render_review(repo, pr, str(final.get("result", "")), sid, wt, seconds)
@@ -1228,7 +1236,8 @@ def install() -> int:
     cfg = load_config()
     if not CONFIG.exists():
         if sys.stdin.isatty():
-            return setup()
+            # setup 에서 설치를 미루면 install 은 실패로 끝낸다
+            return setup() or (0 if PLIST.exists() else 1)
         example = Path(__file__).with_name("config.example.json")
         write_json(CONFIG, read_json(example, DEFAULT_CONFIG))
         print(f"{CONFIG} 를 만들었다. `pr-reviewer.py setup` 으로 채우거나 직접 고친 뒤 다시 install 하라")
@@ -1268,7 +1277,6 @@ def install() -> int:
 
 
 ORCA_APP = "/Applications/Orca.app/Contents/Resources/bin/orca"
-BREWS = ("/opt/homebrew/bin/brew", "/usr/local/bin/brew")
 
 
 def ask(question: str, default: str = "") -> str:
@@ -1306,8 +1314,8 @@ def setup_repos(cfg: dict, current: dict[str, str]) -> dict[str, str]:
             print(f"  {name}: {tilde(d)}")
         if not ask_yes("이대로 둘까", True):
             repos = {}
-    known = {str(Path(d).resolve()) for d in repos.values()}
-    candidates = [p for p in orca_repo_paths(cfg) if str(Path(p).resolve()) not in known]
+    known = {str(Path(d).expanduser().resolve()) for d in repos.values()}
+    candidates = [p for p in orca_repo_paths({**cfg, "terminal_timeout_seconds": 30}) if str(Path(p).resolve()) not in known]
     picked: list[str] = []
     if candidates:
         print("Orca 에 등록된 레포:")
@@ -1342,17 +1350,21 @@ def setup_notifier(paths: dict) -> None:
     """알림을 눌러 PR 을 열려면 terminal-notifier 가 있어야 한다. 없으면 기본 알림만 뜨고 눌러도 열리지 않는다."""
     found = find_tool(paths, "terminal-notifier")
     if not found:
-        brew = shutil.which("brew") or next((b for b in BREWS if Path(b).exists()), None)
+        brew = find_tool(paths, "brew")
         if not brew:
             print("terminal-notifier 가 없어 맥 기본 알림만 뜬다 (눌러도 PR 이 열리지 않는다). Homebrew 로 설치할 수 있다")
             return
         if not ask_yes("알림을 눌러 PR 을 열려면 terminal-notifier 가 필요하다. brew 로 설치할까", True):
             return
-        if subprocess.run([brew, "install", "terminal-notifier"], timeout=900).returncode != 0:
+        try:
+            ok = subprocess.run([brew, "install", "terminal-notifier"], timeout=900).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            ok = False
+        found = find_tool({}, "terminal-notifier") if ok else None
+        if not found:
             print("  설치하지 못했다. 맥 기본 알림을 쓴다")
             return
-        found = shutil.which("terminal-notifier") or str(Path(brew).parent / "terminal-notifier")
-    if Path(found).exists():
+    if found:
         # launchd 는 로그인 셸 PATH 를 모르니 절대 경로를 적어 둔다 (인텔 맥의 /usr/local/bin 도)
         paths["terminal-notifier"] = found
 
