@@ -947,10 +947,15 @@ def opens_for(cfg: dict, repo: str, repo_dir: str, pr: dict, mine: bool, action:
             return "url", pr["url"] + "/checks"
         if cfg["terminal"] != "none" and orca_worktree_for_branch(cfg, repo_dir, pr["headRefName"]):
             return "session", None
-        return "url", pr["url"]
-    if cfg["auto_review"] and cfg["terminal"] != "none" and ps.get("session_id") and worktree_path(repo, pr["number"]).exists():
+    # 봇 PR 은 내 PR 이지만 리뷰 세션이 있으니 작업 탭이 없으면 리뷰 탭으로 간다
+    if has_review_session(cfg, repo, pr["number"], ps):
         return "session", None
     return "url", pr["url"]
+
+
+def has_review_session(cfg: dict, repo: str, number: int, ps: dict) -> bool:
+    return bool(cfg["auto_review"] and cfg["terminal"] != "none" and ps.get("session_id")
+                and worktree_path(repo, number).exists())
 
 
 ISSUE_KEY = re.compile(r"(?<![A-Za-z0-9])([A-Z][A-Z0-9]+)-(\d+)(?![A-Za-z0-9])")
@@ -1158,7 +1163,7 @@ def open_pr(repo: str, number: int, mine: bool) -> int:
             return 0
     ps = state.get("repos", {}).get(repo, {}).get("prs", {}).get(str(number), {})
     wt = worktree_path(repo, number)
-    if not mine and cfg["auto_review"] and ps.get("session_id") and wt.exists():
+    if has_review_session(cfg, repo, number, ps):
         if repo in cfg["repos"]:
             orca_nest(cfg, wt, cfg["repos"][repo], None, number)
         if open_in_terminal(cfg, wt, f"claude --resume {ps['session_id']}", f"{repo}#{number}"):
