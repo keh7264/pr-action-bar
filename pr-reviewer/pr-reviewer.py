@@ -877,10 +877,15 @@ def team_action(pr: dict, me: str, ps: dict, repo_seen: bool = True) -> str:
     if any(r["state"] == "APPROVED" for r in pr["reviews"]["nodes"]):
         return "Approved by others"
     # 새로 올라온 PR 은 리뷰가 끝나기 전에도 바로 보인다. 첫 폴링 전 레포의 PR 은 자동 리뷰 대상이 아니다
-    waiting = not ps.get("reviewed_at") and not ps.get("seen_only") and not ps.get("gave_up")
-    if repo_seen and (ps.get("reviewing_since") or waiting):
+    if repo_seen and review_pending(ps):
         return "Reviewing"
     return "Needs review"
+
+
+def review_pending(ps: dict) -> bool:
+    """리뷰 중이거나 다음 폴링에 리뷰될 PR. 리뷰가 시작되기 전부터 Reviewing 으로 띄운다."""
+    waiting = not ps.get("reviewed_at") and not ps.get("seen_only") and not ps.get("gave_up")
+    return bool(ps.get("reviewing_since") or waiting)
 
 
 def check_state(pr: dict) -> str | None:
@@ -997,15 +1002,18 @@ def build_status(cfg: dict, state: dict) -> dict:
             pr_like = {"title": pr["title"], "author": {"login": author}}
             release = is_release_pr(cfg, pr_like)
             mine = author == me or is_bot_pr(cfg, pr_like) or release
+            # 실제로 리뷰될 PR 만 Reviewing 으로 띄운다 (skip 대상·보류·끈 상태는 빼고)
+            reviewable = (cfg["auto_review"] and bool(state.get("repos", {}).get(repo, {}).get("seen_initial"))
+                          and not ps.get("held"))
             if mine:
                 action = my_action(pr, me, release)
+                if (reviewable and is_bot_pr(cfg, pr_like) and not release and not pr["isDraft"]
+                        and review_pending(ps)):
+                    action = "Reviewing"
             elif pr["isDraft"]:
                 action = None  # 남의 Draft 는 아직 리뷰할 단계가 아니다
             else:
-                # 실제로 리뷰될 PR 만 Reviewing 으로 띄운다 (skip 대상·보류·끈 상태는 Needs review)
-                reviewing = (cfg["auto_review"] and bool(state.get("repos", {}).get(repo, {}).get("seen_initial"))
-                             and author not in cfg["skip_authors"] and not ps.get("held"))
-                action = team_action(pr, me, ps, reviewing)
+                action = team_action(pr, me, ps, reviewable and author not in cfg["skip_authors"])
             issue_key, issue_url = issue_of(cfg, pr["headRefName"], pr["title"])
             opens, page_url = opens_for(cfg, repo, repo_dir, pr, mine, action or "", ps)
             entry = {
