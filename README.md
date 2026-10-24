@@ -89,7 +89,7 @@ claude plugin install review-buttons@pr-action-bar
 
 `~/.pr-reviewer/prompts/<이름>.md`에 파일을 두면 기본 프롬프트 대신 그걸 쓴다. 이름은 `review`, `recheck`, `recheck_bot`, `summarize`, `summarize_bot`, `reply`다. 팀 리뷰 기준만 덧붙이고 싶으면 `extra-criteria.md`에 적으면 재검토 단계에 들어간다.
 
-프롬프트 안에서는 `{{NUMBER}}`, `{{EFFORT}}`, `{{LANGUAGE}}`, `{{THREAD_FILE}}`, `{{EXTRA_CRITERIA}}`를 쓸 수 있다. `summarize`가 내는 JSON 모양(`summary`와 `findings`)은 그대로 두는 게 좋다. 모양이 깨져도 리뷰를 버리지는 않고 원문을 그대로 리뷰 파일에 남기긴 한다.
+프롬프트 안에서는 `{{NUMBER}}`, `{{EFFORT}}`, `{{LANGUAGE}}`, `{{THREAD_FILE}}`, `{{EXTRA_CRITERIA}}`, `{{FORMAT}}`을 쓸 수 있다. `summarize`가 내는 마크다운은 리뷰 탭에서 그대로 읽히고 리뷰 파일 본문이 된다. 지적마다 붙는 `` `경로:줄` · 꼭 수정 `` 줄로 리뷰 파일 머리의 개수를 세니, 바꾸더라도 `{{FORMAT}}`은 남겨 두는 게 좋다.
 
 ## 띠 읽는 법
 
