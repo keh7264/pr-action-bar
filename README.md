@@ -105,6 +105,8 @@ orca repo add --path ~/work/app
 orca repo set --repo path:$HOME/work/app --external-worktree-visibility show
 ```
 
+리뷰 worktree는 Orca 사이드바에서 그 레포의 기본 브랜치 worktree 아래에 `#1235 리뷰` 같은 이름으로 들어간다. 리뷰 세션이 많아져도 작업하던 worktree와 섞이지 않게 하려고 그렇게 했다. 기본 브랜치를 체크아웃한 worktree가 Orca에 없으면 `repos`에 적은 경로 아래로 넣는다.
+
 리뷰 탭을 처음 열 때 Claude Code가 이 폴더를 믿을지 한 번 물어본다.
 
 내 리뷰에 답글이 달리면, 열려 있는 리뷰 탭의 입력창이 비어 있을 때만 그 탭에 프롬프트를 넣는다. 뭔가 쓰고 있던 중이면 다음 폴링까지 기다린다. 탭이 없으면 원래 세션을 갈라서(`--fork-session`) 뒤에서 돌린다.

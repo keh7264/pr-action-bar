@@ -659,7 +659,7 @@ def review_pr(cfg: dict, state: dict, repo: str, repo_dir: str, pr: dict) -> Non
     save_state(state)
     log(f"{repo}#{pr['number']} 리뷰 완료 ({seconds}초) → {out}")
     notify(cfg, state, f"{repo}#{pr['number']} 리뷰 완료", pr["title"][:100], url=pr["url"])
-    terminal_prepare(cfg, wt, sid, f"{repo}#{pr['number']}")
+    terminal_prepare(cfg, wt, sid, f"{repo}#{pr['number']}", repo_dir, pr["baseRefName"], pr["number"])
 
 
 # ───────────────────────── 답글 리뷰 ─────────────────────────
@@ -769,9 +769,22 @@ def orca_tab(cfg: dict, wt: Path) -> dict | None:
     return max(tabs, key=lambda t: t.get("lastOutputAt") or "", default=None)
 
 
-def terminal_prepare(cfg: dict, wt: Path, sid: str, title: str) -> None:
+def orca_nest(cfg: dict, wt: Path, repo_dir: str, base: str | None, number: int) -> None:
+    """리뷰 worktree 를 기본 브랜치 worktree 아래로 넣어 작업 worktree 와 섞이지 않게 한다. 실패해도 넘어간다."""
     if cfg["terminal"] != "orca":
         return
+    if not base:
+        head = git(cfg, "symbolic-ref", "--short", "refs/remotes/origin/HEAD", cwd=repo_dir, check=False).stdout.strip()
+        base = head.removeprefix("origin/") or None
+    parent = (orca_worktree_for_branch(cfg, repo_dir, base) if base else None) or repo_dir
+    orca(cfg, "worktree", "set", "--worktree", f"path:{wt}", "--parent-worktree", f"path:{parent}",
+         "--display-name", f"#{number} 리뷰", "--pr", str(number))
+
+
+def terminal_prepare(cfg: dict, wt: Path, sid: str, title: str, repo_dir: str, base: str, number: int) -> None:
+    if cfg["terminal"] != "orca":
+        return
+    orca_nest(cfg, wt, repo_dir, base, number)
     if orca_tab(cfg, wt):
         return
     # --focus 를 주지 않으면 포커스를 가져가지 않는다
@@ -1146,6 +1159,8 @@ def open_pr(repo: str, number: int, mine: bool) -> int:
     ps = state.get("repos", {}).get(repo, {}).get("prs", {}).get(str(number), {})
     wt = worktree_path(repo, number)
     if not mine and cfg["auto_review"] and ps.get("session_id") and wt.exists():
+        if repo in cfg["repos"]:
+            orca_nest(cfg, wt, cfg["repos"][repo], None, number)
         if open_in_terminal(cfg, wt, f"claude --resume {ps['session_id']}", f"{repo}#{number}"):
             return 0
     if url:
