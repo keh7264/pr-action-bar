@@ -52,14 +52,19 @@ function world(on: On, w: World) {
   return clock
 }
 
-const start = ($: any) => $.session.start({ cwd: '/w/app', surface: 'terminal', isInteractive: true })
+async function setup($: any, on: On, over: Partial<World> = {}) {
+  const w: World = { files: { [STATUS]: JSON.stringify(STATUS_JSON) }, cwd: '/w/app', branch: 'feature/TEST-1', runs: [], ...over }
+  const clock = world(on, w)
+  await $.session.start({ cwd: '/w/app', surface: 'terminal', isInteractive: true })
+  return { w, clock }
+}
+
+const mount = ($: any, surface: 'terminal' | 'desktop' = 'terminal') => $.ui.mount({ ...BAND, surface })
 
 test('띠에 내 PR · 팀 PR · This PR 이 그려진다', async ($, on) => {
-  const w: World = { files: { [STATUS]: JSON.stringify(STATUS_JSON) }, cwd: '/w/app', branch: 'feature/TEST-1', runs: [] }
-  world(on, w)
-  await start($)
+  await setup($, on)
   for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ ...BAND, surface })
+    const ui = await mount($, surface)
     expect(await ui.find({ type: 'Text', text: /My PR/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Team PR/ })).toBeDefined()
     expect((await ui.find({ key: 'app#7' }))?.text).toBe('app#7')
@@ -72,10 +77,8 @@ test('띠에 내 PR · 팀 PR · This PR 이 그려진다', async ($, on) => {
 })
 
 test('누르면 PR 페이지 · 봇 스크립트 · 리뷰 파일이 열린다', async ($, on) => {
-  const w: World = { files: { [STATUS]: JSON.stringify(STATUS_JSON) }, cwd: '/w/app', branch: 'feature/TEST-1', runs: [] }
-  world(on, w)
-  await start($)
-  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const { w } = await setup($, on)
+  const ui = await mount($)
   w.runs.length = 0
   await ui.press({ key: 'app#7' })
   expect(w.runs.at(-1)).toEqual(['/usr/bin/open', 'https://github.com/o/app/pull/7'])
@@ -88,30 +91,24 @@ test('누르면 PR 페이지 · 봇 스크립트 · 리뷰 파일이 열린다',
 })
 
 test('리뷰 worktree 에서는 그 PR 이 This PR 이다', async ($, on) => {
-  const w: World = { files: { [STATUS]: JSON.stringify(STATUS_JSON) }, cwd: `${HOME}/.pr-reviewer/wt/app-8/src`, branch: '', runs: [] }
-  world(on, w)
-  await start($)
-  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await setup($, on, { cwd: `${HOME}/.pr-reviewer/wt/app-8/src`, branch: '' })
+  const ui = await mount($)
   expect((await ui.find({ key: 'this-title' }))?.text).toBe('feat: x (#8)')
   await ui.unmount()
 })
 
 test('status.json 이 없으면 띠를 그리지 않는다', async ($, on) => {
-  const w: World = { files: {}, cwd: '/w/app', branch: 'feature/TEST-1', runs: [] }
-  world(on, w)
-  await start($)
-  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await setup($, on, { files: {} })
+  const ui = await mount($)
   expect(await ui.find({ type: 'Text', text: /My PR/ })).toBeUndefined()
   await ui.unmount()
 })
 
 test('status.json 이 깨지면 직전 띠를 그대로 둔다', async ($, on) => {
-  const w: World = { files: { [STATUS]: JSON.stringify(STATUS_JSON) }, cwd: '/w/app', branch: 'x', runs: [] }
-  const clock = world(on, w)
-  await start($)
+  const { w, clock } = await setup($, on, { branch: 'x' })
   w.files[STATUS] = '{"updated_at": '
   await clock.advance(30_000)
-  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const ui = await mount($)
   expect((await ui.find({ key: 'app#7' }))?.text).toBe('app#7')
   await ui.unmount()
 })

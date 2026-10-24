@@ -224,12 +224,14 @@ def load_config() -> dict:
     return cfg
 
 
+def find_tool(paths: dict, name: str) -> str | None:
+    """launchd 는 로그인 셸 PATH 를 받지 않으니 설정에 적힌 절대 경로를 먼저 쓴다."""
+    p = paths.get(name)
+    return p if p and Path(p).exists() else shutil.which(name)
+
+
 def tool(cfg: dict, name: str) -> str:
-    """launchd 는 로그인 셸 PATH 를 받지 않으니 설정에 적힌 절대 경로를 쓴다."""
-    p = cfg.get("paths", {}).get(name)
-    if p and Path(p).exists():
-        return p
-    found = shutil.which(name)
+    found = find_tool(cfg.get("paths", {}), name)
     if found:
         return found
     raise Failed(f"{name} 을 찾지 못했다. `pr-reviewer.py install` 을 다시 실행해 경로를 고쳐라")
@@ -275,10 +277,9 @@ def notify(cfg: dict, state: dict, title: str, message: str, *, kind: str | None
         if last and now() - last < dt.timedelta(hours=cfg["notify_every_hours"]):
             return
         sent[kind] = iso()
-    tn = (cfg.get("paths", {}).get("terminal-notifier") or shutil.which("terminal-notifier")
-          or "/opt/homebrew/bin/terminal-notifier")
+    tn = find_tool(cfg.get("paths", {}), "terminal-notifier")
     try:
-        if Path(tn).exists():
+        if tn:
             argv = [tn, "-title", title, "-message", message, "-group", f"pr-reviewer-{kind or title}"]
             if url:
                 argv += ["-open", url]
@@ -711,7 +712,7 @@ def tcall(cfg: dict, argv: list[str]) -> subprocess.CompletedProcess | None:
 
 
 def orca(cfg: dict, *args: str) -> dict | None:
-    exe = cfg.get("paths", {}).get("orca") or shutil.which("orca")
+    exe = find_tool(cfg.get("paths", {}), "orca")
     if not exe:
         return None
     p = tcall(cfg, [exe, *args, "--json"])
@@ -1168,8 +1169,8 @@ def doctor(cfg: dict | None = None) -> list[str]:
     # 띠만 쓰면 claude 는 필요 없다
     names = ("python3", "git", "gh", "claude", "node") if cfg["auto_review"] else ("python3", "git", "gh")
     for name in names:
-        exe = cfg.get("paths", {}).get(name) or shutil.which(name)
-        if not exe or not Path(exe).exists():
+        exe = find_tool(cfg.get("paths", {}), name)
+        if not exe:
             problems.append(f"{name}: 찾지 못함")
             continue
         try:
@@ -1211,7 +1212,9 @@ PLIST_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     <string>{python}</string>
     <string>{script}</string>
   </array>
-{env}  <key>StartInterval</key><integer>300</integer>
+  <key>EnvironmentVariables</key>
+  <dict><key>PR_REVIEWER_HOME</key><string>{root}</string></dict>
+  <key>StartInterval</key><integer>300</integer>
   <key>RunAtLoad</key><true/>
   <key>StandardOutPath</key><string>{logs}/launchd.out.log</string>
   <key>StandardErrorPath</key><string>{logs}/launchd.err.log</string>
@@ -1256,11 +1259,8 @@ def install() -> int:
             return 1
         PLIST.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(["/bin/launchctl", "unload", str(PLIST)], capture_output=True)
-        # 다른 폴더에 설치했으면 launchd 가 돌리는 쪽도 그 폴더를 보게 한다
-        env = ("  <key>EnvironmentVariables</key>\n  <dict><key>PR_REVIEWER_HOME</key>"
-               f"<string>{ROOT}</string></dict>\n") if "PR_REVIEWER_HOME" in os.environ else ""
         write_atomic(PLIST, PLIST_TEMPLATE.format(label=LABEL, python=paths.get("python3", sys.executable),
-                                                  script=target, logs=LOGS, env=env))
+                                                  script=target, logs=LOGS, root=ROOT))
         LOGS.mkdir(parents=True, exist_ok=True)
         subprocess.run(["/bin/launchctl", "load", str(PLIST)], check=True)
     print(f"설치 완료. 5분마다 {target} 가 돈다. 로그: {LOGS}/pr-reviewer.log")
@@ -1293,6 +1293,11 @@ def tilde(path: str) -> str:
     return "~" + path[len(str(HOME)):] if path.startswith(str(HOME) + "/") else path
 
 
+def orca_repo_paths(cfg: dict) -> list[str]:
+    return [r["path"] for r in (orca(cfg, "repo", "list") or {}).get("repos", [])
+            if r.get("kind", "git") == "git" and r.get("path")]
+
+
 def setup_repos(cfg: dict, current: dict[str, str]) -> dict[str, str]:
     repos = {k: tilde(v) for k, v in current.items()}
     if repos:
@@ -1302,8 +1307,7 @@ def setup_repos(cfg: dict, current: dict[str, str]) -> dict[str, str]:
         if not ask_yes("이대로 둘까", True):
             repos = {}
     known = {str(Path(d).resolve()) for d in repos.values()}
-    candidates = [r["path"] for r in (orca(cfg, "repo", "list") or {}).get("repos", [])
-                  if r.get("kind", "git") == "git" and r.get("path") and str(Path(r["path"]).resolve()) not in known]
+    candidates = [p for p in orca_repo_paths(cfg) if str(Path(p).resolve()) not in known]
     picked: list[str] = []
     if candidates:
         print("Orca 에 등록된 레포:")
@@ -1336,7 +1340,7 @@ def setup_repos(cfg: dict, current: dict[str, str]) -> dict[str, str]:
 
 def setup_notifier(paths: dict) -> None:
     """알림을 눌러 PR 을 열려면 terminal-notifier 가 있어야 한다. 없으면 기본 알림만 뜨고 눌러도 열리지 않는다."""
-    found = paths.get("terminal-notifier") or shutil.which("terminal-notifier")
+    found = find_tool(paths, "terminal-notifier")
     if not found:
         brew = shutil.which("brew") or next((b for b in BREWS if Path(b).exists()), None)
         if not brew:
@@ -1356,7 +1360,7 @@ def setup_notifier(paths: dict) -> None:
 def setup_orca(cfg: dict, repos: dict[str, str]) -> None:
     """리뷰 worktree 가 Orca 에 보여야 리뷰 탭을 열 수 있다. 레포를 등록하고 바깥 worktree 를 보이게 한다."""
     slow = {**cfg, "terminal_timeout_seconds": 30}
-    registered = {str(Path(r["path"]).resolve()) for r in (orca(slow, "repo", "list") or {}).get("repos", []) if r.get("path")}
+    registered = {str(Path(p).resolve()) for p in orca_repo_paths(slow)}
     for name, d in repos.items():
         path = str(Path(d).expanduser().resolve())
         if path not in registered and orca(slow, "repo", "add", "--path", path) is None:
@@ -1384,12 +1388,12 @@ def setup() -> int:
         auto = ask_yes("새 PR 을 Claude Code 로 미리 리뷰할까 (끄면 PR 상태 띠만 쓰고 Claude 사용량이 들지 않는다)",
                        cfg["auto_review"])
         if auto:
-            if not (paths.get("claude") or shutil.which("claude")):
+            if not find_tool(paths, "claude"):
                 print("  claude 를 찾지 못했다. 설치한 뒤 다시 돌리거나, 리뷰 없이 띠만 쓰려면 n 으로 답하라")
             print("  /code-review high 로 리뷰하고, 지적마다 실제로 터지는지 한 번 더 검증한 뒤에 알린다")
         print()
         terminal = "none"
-        if paths.get("orca") or shutil.which("orca"):
+        if find_tool(paths, "orca"):
             if ask_yes("PR 을 누르면 Orca 탭(리뷰 세션 · 작업 탭)으로 갈까 (아니면 PR 페이지가 열린다)",
                        first or cfg["terminal"] == "orca"):
                 terminal = "orca"
