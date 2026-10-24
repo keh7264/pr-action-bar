@@ -24,7 +24,7 @@ PR 상태를 Slack 알림 대신 Claude Code 입력창 바로 위에 띄우고, 
 - macOS (launchd, `caffeinate`, `open`을 쓴다)
 - Python 3.10 이상, git, 로그인된 [GitHub CLI](https://cli.github.com/) (`gh auth login`)
 - [Claude Code](https://claude.com/claude-code). mod를 지원하는 버전이어야 하고, 자동 리뷰를 쓰면 `/code-review` 스킬도 있어야 한다
-- 있으면 좋은 것: `terminal-notifier` (알림을 누르면 PR이 열린다), Orca (리뷰 세션을 탭으로 연다)
+- 있으면 좋은 것: `terminal-notifier` (알림을 누르면 PR이 열린다. `setup`이 brew로 깔아 준다), Orca (리뷰 세션을 탭으로 연다)
 
 ## 띠만 쓸 수도 있다
 
@@ -47,7 +47,8 @@ python3 pr-reviewer/pr-reviewer.py setup
 1. 리뷰할 레포. Orca에 등록된 레포가 있으면 번호로 고르고, 없으면 경로를 적는다. 띠에 붙을 짧은 이름도 정한다.
 2. 자동 리뷰를 쓸지. 끄면 띠만 쓴다. 켜면 `/code-review high`로 리뷰하고, 지적마다 실제로 터지는지 한 번 더 검증한 뒤에 알린다.
 3. PR을 누르면 Orca 탭으로 갈지. 그러면 레포를 Orca에 등록하고 바깥 worktree도 보이게 켜 둔다.
-4. 이슈 링크 템플릿과 이슈 프로젝트 키.
+4. `terminal-notifier`가 없으면 brew로 설치할지. 있어야 알림을 눌러 PR을 연다. 없으면 맥 기본 알림만 뜬다.
+5. 이슈 링크 템플릿과 이슈 프로젝트 키.
 
 다 답하면 `~/.pr-reviewer/config.json`에 저장하고 바로 설치까지 한다. 다시 돌리면 지금 값을 기본값으로 묻는다. 나머지 값(`skip_authors`, `bot_pr_markers` 등)은 그 파일을 직접 고친다. 설정만 고친 뒤에는 `install`로 다시 설치한다.
 

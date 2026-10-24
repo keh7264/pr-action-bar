@@ -275,7 +275,8 @@ def notify(cfg: dict, state: dict, title: str, message: str, *, kind: str | None
         if last and now() - last < dt.timedelta(hours=cfg["notify_every_hours"]):
             return
         sent[kind] = iso()
-    tn = shutil.which("terminal-notifier") or "/opt/homebrew/bin/terminal-notifier"
+    tn = (cfg.get("paths", {}).get("terminal-notifier") or shutil.which("terminal-notifier")
+          or "/opt/homebrew/bin/terminal-notifier")
     try:
         if Path(tn).exists():
             argv = [tn, "-title", title, "-message", message, "-group", f"pr-reviewer-{kind or title}"]
@@ -1230,7 +1231,8 @@ def install() -> int:
         print(f"{CONFIG} 를 만들었다. `pr-reviewer.py setup` 으로 채우거나 직접 고친 뒤 다시 install 하라")
         return 1
     paths = cfg.setdefault("paths", {})
-    names = ("python3", "git", "gh", "claude", "node", "orca") if cfg["auto_review"] else ("python3", "git", "gh", "orca")
+    names = ("python3", "git", "gh", "claude", "node", "orca", "terminal-notifier") if cfg["auto_review"] \
+        else ("python3", "git", "gh", "orca", "terminal-notifier")
     for name in names:
         current = paths.get(name)
         if not current or not Path(current).exists():
@@ -1266,6 +1268,7 @@ def install() -> int:
 
 
 ORCA_APP = "/Applications/Orca.app/Contents/Resources/bin/orca"
+BREWS = ("/opt/homebrew/bin/brew", "/usr/local/bin/brew")
 
 
 def ask(question: str, default: str = "") -> str:
@@ -1331,6 +1334,25 @@ def setup_repos(cfg: dict, current: dict[str, str]) -> dict[str, str]:
     return repos
 
 
+def setup_notifier(paths: dict) -> None:
+    """알림을 눌러 PR 을 열려면 terminal-notifier 가 있어야 한다. 없으면 기본 알림만 뜨고 눌러도 열리지 않는다."""
+    found = paths.get("terminal-notifier") or shutil.which("terminal-notifier")
+    if not found:
+        brew = shutil.which("brew") or next((b for b in BREWS if Path(b).exists()), None)
+        if not brew:
+            print("terminal-notifier 가 없어 맥 기본 알림만 뜬다 (눌러도 PR 이 열리지 않는다). Homebrew 로 설치할 수 있다")
+            return
+        if not ask_yes("알림을 눌러 PR 을 열려면 terminal-notifier 가 필요하다. brew 로 설치할까", True):
+            return
+        if subprocess.run([brew, "install", "terminal-notifier"], timeout=900).returncode != 0:
+            print("  설치하지 못했다. 맥 기본 알림을 쓴다")
+            return
+        found = shutil.which("terminal-notifier") or str(Path(brew).parent / "terminal-notifier")
+    if Path(found).exists():
+        # launchd 는 로그인 셸 PATH 를 모르니 절대 경로를 적어 둔다 (인텔 맥의 /usr/local/bin 도)
+        paths["terminal-notifier"] = found
+
+
 def setup_orca(cfg: dict, repos: dict[str, str]) -> None:
     """리뷰 worktree 가 Orca 에 보여야 리뷰 탭을 열 수 있다. 레포를 등록하고 바깥 worktree 를 보이게 한다."""
     slow = {**cfg, "terminal_timeout_seconds": 30}
@@ -1373,6 +1395,8 @@ def setup() -> int:
                 terminal = "orca"
         else:
             print("Orca 가 없어서 PR 을 누르면 PR 페이지가 열린다")
+        print()
+        setup_notifier(paths)
         print()
         tpl = ask("이슈 링크 ({key} 자리에 키가 들어간다. 예: https://team.atlassian.net/browse/{key}, 비우면 이슈 버튼 없음, - 는 지우기)",
                   cfg["issue_url_template"])
