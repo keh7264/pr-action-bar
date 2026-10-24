@@ -23,12 +23,12 @@ PR 상태를 Slack 알림 대신 Claude Code 입력창 바로 위에 띄우고, 
 
 - macOS (launchd, `caffeinate`, `open`을 쓴다)
 - Python 3.10 이상, git, 로그인된 [GitHub CLI](https://cli.github.com/) (`gh auth login`)
-- 자동 리뷰까지 쓰려면 [Claude Code](https://claude.com/claude-code). `/code-review` 스킬과 mod를 지원하는 버전이어야 한다
+- [Claude Code](https://claude.com/claude-code). mod를 지원하는 버전이어야 하고, 자동 리뷰를 쓰면 `/code-review` 스킬도 있어야 한다
 - 있으면 좋은 것: `terminal-notifier` (알림을 누르면 PR이 열린다), Orca (리뷰 세션을 탭으로 연다)
 
 ## 띠만 쓸 수도 있다
 
-리뷰는 필요 없고 상태만 보고 싶으면 설정에서 `"auto_review": false`로 두면 된다. 그러면 GitHub 상태만 받아서 띠에 띄우고, Claude 사용량은 들지 않는다. claude도 설치돼 있을 필요가 없다.
+리뷰는 필요 없고 상태만 보고 싶으면 설정에서 `"auto_review": false`로 두면 된다. 그러면 GitHub 상태만 받아서 띠에 띄우고 리뷰는 돌리지 않으니, 리뷰에 드는 Claude 사용량이 없다. 띠는 Claude Code 안에 그려지는 거라 Claude Code는 당연히 있어야 한다.
 
 이때도 pr-reviewer는 설치해야 한다. GitHub 조회는 pr-reviewer 한 곳에서만 하고 mod는 `status.json`만 읽기 때문이다. 띠만 쓰는 동안 열린 PR은 "본 것"으로 기록해 두니까, 나중에 `auto_review`를 켜도 밀린 PR을 한꺼번에 리뷰하지 않고 그 뒤에 올라온 PR부터 리뷰한다.
 
