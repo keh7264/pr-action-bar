@@ -10,6 +10,7 @@ launchd 가 5분마다 `pr-reviewer.py` 를 실행한다. 한 번 실행되면
   pr-reviewer.py                       정규 폴링 1회 (launchd 가 부른다)
   pr-reviewer.py --refresh [--full]    status.json 즉시 갱신 (--full: 정규 폴링도 kickstart)
   pr-reviewer.py --open REPO N [--mine]  PR 의 리뷰 세션/작업 탭/PR 페이지 열기
+  pr-reviewer.py setup                 묻고 답하며 설정한 뒤 설치
   pr-reviewer.py install | uninstall | doctor
 """
 
@@ -1254,9 +1255,11 @@ def install() -> int:
     ROOT.mkdir(parents=True, exist_ok=True)
     cfg = load_config()
     if not CONFIG.exists():
+        if sys.stdin.isatty():
+            return setup()
         example = Path(__file__).with_name("config.example.json")
         write_json(CONFIG, read_json(example, DEFAULT_CONFIG))
-        print(f"{CONFIG} 를 만들었다. repos 를 채우고 다시 install 하라")
+        print(f"{CONFIG} 를 만들었다. `pr-reviewer.py setup` 으로 채우거나 직접 고친 뒤 다시 install 하라")
         return 1
     paths = cfg.setdefault("paths", {})
     names = ("python3", "git", "gh", "claude", "node", "orca") if cfg["auto_review"] else ("python3", "git", "gh", "orca")
@@ -1291,6 +1294,145 @@ def install() -> int:
     return 0
 
 
+ORCA_APP = "/Applications/Orca.app/Contents/Resources/bin/orca"
+
+
+def ask(question: str, default: str = "") -> str:
+    shown = f" [{default}]" if default else ""
+    return input(f"{question}{shown}: ").strip() or default
+
+
+def ask_yes(question: str, default: bool) -> bool:
+    ans = input(f"{question} [{'Y/n' if default else 'y/N'}]: ").strip().lower()
+    return default if not ans else ans in ("y", "yes", "ㅇ", "응", "네", "예")
+
+
+def git_toplevel(path: str) -> str | None:
+    try:
+        p = subprocess.run(["git", "-C", path, "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return p.stdout.strip() if p.returncode == 0 else None
+
+
+def tilde(path: str) -> str:
+    return "~" + path[len(str(HOME)):] if path.startswith(str(HOME) + "/") else path
+
+
+def setup_repos(cfg: dict, current: dict[str, str]) -> dict[str, str]:
+    repos = {k: tilde(v) for k, v in current.items()}
+    if repos:
+        print("지금 레포:")
+        for name, d in repos.items():
+            print(f"  {name}: {tilde(d)}")
+        if not ask_yes("이대로 둘까", True):
+            repos = {}
+    known = {str(Path(d).resolve()) for d in repos.values()}
+    candidates = [r["path"] for r in (orca(cfg, "repo", "list") or {}).get("repos", [])
+                  if r.get("kind", "git") == "git" and r.get("path") and str(Path(r["path"]).resolve()) not in known]
+    picked: list[str] = []
+    if candidates:
+        print("Orca 에 등록된 레포:")
+        for i, path in enumerate(candidates, 1):
+            print(f"  {i}. {tilde(path)}")
+        for tok in re.split(r"[,\s]+", ask("넣을 번호를 쉼표로 (엔터=건너뜀)")):
+            if tok.isdigit() and 1 <= int(tok) <= len(candidates):
+                picked.append(candidates[int(tok) - 1])
+    while True:
+        path = ask("더 넣을 레포의 로컬 경로 (엔터=끝)" if repos or picked else "리뷰할 레포의 로컬 경로")
+        if not path:
+            if repos or picked:
+                break
+            continue
+        picked.append(str(Path(path).expanduser()))
+    for path in picked:
+        top = git_toplevel(path)
+        if not top:
+            print(f"  {path} 는 git 저장소가 아니라 뺐다")
+            continue
+        name = Path(top).name
+        while True:
+            name = ask(f"  {tilde(top)} 의 짧은 이름 (띠에 {name}#123 처럼 붙는다)", name)
+            if re.fullmatch(r"[A-Za-z0-9_.-]+", name) and name not in repos:
+                break
+            print("  영문 · 숫자 · - _ . 만, 겹치지 않게")
+        repos[name] = tilde(top)
+    return repos
+
+
+def setup_orca(cfg: dict, repos: dict[str, str]) -> None:
+    """리뷰 worktree 가 Orca 에 보여야 리뷰 탭을 열 수 있다. 레포를 등록하고 바깥 worktree 를 보이게 한다."""
+    slow = {**cfg, "terminal_timeout_seconds": 30}
+    registered = {str(Path(r["path"]).resolve()) for r in (orca(slow, "repo", "list") or {}).get("repos", []) if r.get("path")}
+    for name, d in repos.items():
+        path = str(Path(d).expanduser().resolve())
+        if path not in registered and orca(slow, "repo", "add", "--path", path) is None:
+            print(f"  {name}: Orca 에 등록하지 못했다. Orca 를 켜고 setup 을 다시 돌려라")
+            continue
+        ok = orca(slow, "repo", "set", "--repo", f"path:{path}", "--external-worktree-visibility", "show") is not None
+        print(f"  {name}: Orca 등록 {'완료' if ok else '했지만 바깥 worktree 표시를 켜지 못했다'}")
+
+
+def setup() -> int:
+    """처음 쓸 때 묻고 답하며 config.json 을 채운 뒤 install 까지 한다. 다시 돌리면 지금 값을 기본값으로 묻는다."""
+    ROOT.mkdir(parents=True, exist_ok=True)
+    first = not CONFIG.exists()
+    cfg = load_config()
+    paths = cfg.setdefault("paths", {})
+    if not paths.get("orca") and Path(ORCA_APP).exists():
+        paths["orca"] = ORCA_APP
+    print(f"pr-reviewer 설정 ({CONFIG}). 엔터를 누르면 [ ] 안의 값을 쓴다.\n")
+    try:
+        repos = setup_repos(cfg, {} if first else cfg["repos"])
+        if not repos:
+            print("레포가 없어서 멈춘다")
+            return 1
+        print()
+        auto = ask_yes("새 PR 을 Claude Code 로 미리 리뷰할까 (끄면 PR 상태 띠만 쓰고 Claude 사용량이 들지 않는다)",
+                       cfg["auto_review"])
+        if auto:
+            if not (paths.get("claude") or shutil.which("claude")):
+                print("  claude 를 찾지 못했다. 설치한 뒤 다시 돌리거나, 리뷰 없이 띠만 쓰려면 n 으로 답하라")
+            print("  /code-review high 로 리뷰하고, 지적마다 실제로 터지는지 한 번 더 검증한 뒤에 알린다")
+        print()
+        terminal = "none"
+        if paths.get("orca") or shutil.which("orca"):
+            if ask_yes("PR 을 누르면 Orca 탭(리뷰 세션 · 작업 탭)으로 갈까 (아니면 PR 페이지가 열린다)",
+                       first or cfg["terminal"] == "orca"):
+                terminal = "orca"
+        else:
+            print("Orca 가 없어서 PR 을 누르면 PR 페이지가 열린다")
+        print()
+        tpl = ask("이슈 링크 ({key} 자리에 키가 들어간다. 예: https://team.atlassian.net/browse/{key}, 비우면 이슈 버튼 없음, - 는 지우기)",
+                  cfg["issue_url_template"])
+        tpl = "" if tpl == "-" else tpl
+        projects = cfg["issue_projects"]
+        if tpl:
+            if "{key}" not in tpl:
+                print("  {key} 가 없어서 링크가 모두 같은 주소로 간다")
+            raw = ask("  이슈 키로 칠 프로젝트를 쉼표로 (예: SHOP,APP, 비우면 ABC-123 모양은 다)", ",".join(projects))
+            projects = [p.strip().upper() for p in raw.split(",") if p.strip()]
+    except (EOFError, KeyboardInterrupt):
+        print("\n그만뒀다. 설정은 바꾸지 않았다")
+        return 1
+
+    base = read_json(CONFIG, {}) if not first else read_json(Path(__file__).with_name("config.example.json"), {})
+    base.update(repos=repos, auto_review=auto, effort="high", terminal=terminal,
+                issue_url_template=tpl, issue_projects=projects, paths=paths)
+    write_json(CONFIG, base)
+    print(f"\n{CONFIG} 에 저장했다. 다른 값(skip_authors, bot_pr_markers …)은 이 파일에서 고친다")
+    if terminal == "orca":
+        setup_orca(load_config(), repos)
+    try:
+        go = ask_yes("\n지금 설치(점검 + launchd 등록)할까", True)
+    except (EOFError, KeyboardInterrupt):
+        go = False
+    if not go:
+        print("나중에 `pr-reviewer.py install` 로 설치한다")
+        return 0
+    return install()
+
+
 def uninstall() -> int:
     with try_lock(LOCK) as got:
         if not got:
@@ -1306,7 +1448,7 @@ def uninstall() -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", nargs="?", choices=["poll", "install", "uninstall", "doctor"], default="poll")
+    ap.add_argument("command", nargs="?", choices=["poll", "setup", "install", "uninstall", "doctor"], default="poll")
     ap.add_argument("--refresh", action="store_true")
     ap.add_argument("--full", action="store_true")
     ap.add_argument("--open", nargs=2, metavar=("REPO", "NUMBER"))
@@ -1317,6 +1459,8 @@ def main() -> int:
             return refresh(args.full)
         if args.open:
             return open_pr(args.open[0], int(args.open[1]), args.mine)
+        if args.command == "setup":
+            return setup()
         if args.command == "install":
             return install()
         if args.command == "uninstall":

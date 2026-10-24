@@ -39,10 +39,17 @@ PR 상태를 Slack 알림 대신 Claude Code 입력창 바로 위에 띄우고, 
 ```sh
 git clone https://github.com/keh7264/pr-action-bar.git
 cd pr-action-bar
-python3 pr-reviewer/pr-reviewer.py install   # 처음엔 ~/.pr-reviewer/config.json만 만들고 멈춘다
-$EDITOR ~/.pr-reviewer/config.json            # repos에 레포의 로컬 경로를 적는다
-python3 pr-reviewer/pr-reviewer.py install   # 점검하고 launchd에 등록한다
+python3 pr-reviewer/pr-reviewer.py setup
 ```
+
+`setup`이 차례로 묻는다.
+
+1. 리뷰할 레포. Orca에 등록된 레포가 있으면 번호로 고르고, 없으면 경로를 적는다. 띠에 붙을 짧은 이름도 정한다.
+2. 자동 리뷰를 쓸지. 끄면 띠만 쓴다. 켜면 `/code-review high`로 리뷰하고, 지적마다 실제로 터지는지 한 번 더 검증한 뒤에 알린다.
+3. PR을 누르면 Orca 탭으로 갈지. 그러면 레포를 Orca에 등록하고 바깥 worktree도 보이게 켜 둔다.
+4. 이슈 링크 템플릿과 이슈 프로젝트 키.
+
+다 답하면 `~/.pr-reviewer/config.json`에 저장하고 바로 설치까지 한다. 다시 돌리면 지금 값을 기본값으로 묻는다. 나머지 값(`skip_authors`, `bot_pr_markers` 등)은 그 파일을 직접 고친다. 설정만 고친 뒤에는 `install`로 다시 설치한다.
 
 `install`은 `gh`, `git`, `claude` 같은 도구의 절대 경로를 찾아 설정에 적어 둔다. launchd는 로그인 셸의 PATH를 모르기 때문에, nvm이나 fnm으로 깐 claude를 이렇게 안 해 주면 못 찾는다. 그다음 도구들이 실제로 돌아가는지, `gh`가 로그인돼 있는지, 레포마다 비밀번호 없이 `git ls-remote`가 되는지(VPN이 필요한 회사 레포 때문에) 확인한다. 스크립트는 `~/.pr-reviewer/bin/`에 복사해 두고 launchd는 그 복사본을 돌린다. 그래서 레포를 업데이트하면 `install`을 한 번 더 돌려야 한다.
 
@@ -108,7 +115,7 @@ PR 번호에 마우스를 올렸을 때 주황색이면 Claude 세션이 열리�
 
 `"terminal": "orca"`로 두면 리뷰가 끝날 때 그 PR worktree에 `claude --resume` 탭을 하나 열어 두고, 띠에서 PR을 누르면 그 탭으로 간다. 탭을 닫았으면 같은 세션을 이어서 다시 연다.
 
-리뷰 worktree(`~/.pr-reviewer/wt/…`)는 Orca가 만든 게 아니라서 그냥 두면 Orca가 모른다. 그러면 탭을 못 열고 PR 페이지가 대신 열린다. 레포를 Orca에 등록하고 바깥 worktree도 보이게 해 두면 된다.
+리뷰 worktree(`~/.pr-reviewer/wt/…`)는 Orca가 만든 게 아니라서 그냥 두면 Orca가 모른다. 그러면 탭을 못 열고 PR 페이지가 대신 열린다. `setup`에서 Orca를 고르면 레포를 Orca에 등록하고 바깥 worktree도 보이게 켜 준다. 손으로 하려면 이렇게 한다.
 
 ```sh
 orca repo add --path ~/work/app
@@ -137,6 +144,7 @@ worktree에 내가 직접 고친 파일이나 다른 브랜치가 있으면 덮�
 python3 ~/.pr-reviewer/bin/pr-reviewer.py              # 폴링 한 번
 python3 ~/.pr-reviewer/bin/pr-reviewer.py --refresh     # status.json만 바로 갱신 (--full이면 리뷰 폴링도 같이)
 python3 ~/.pr-reviewer/bin/pr-reviewer.py --open repo-a 1235 [--mine]
+python3 ~/.pr-reviewer/bin/pr-reviewer.py setup         # 설정을 묻고 답하며 다시 고친다
 python3 ~/.pr-reviewer/bin/pr-reviewer.py doctor        # 설치 상태만 점검
 python3 ~/.pr-reviewer/bin/pr-reviewer.py uninstall     # launchd에서 뺀다 (기록과 worktree는 남는다)
 ```
