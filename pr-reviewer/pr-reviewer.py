@@ -290,8 +290,9 @@ def notify(cfg: dict, state: dict, title: str, message: str, *, kind: str | None
                 argv += ["-open", url]
             subprocess.run(argv, timeout=10, capture_output=True)
         else:
-            script = f"display notification {json.dumps(message)} with title {json.dumps(title)}"
-            subprocess.run(["/usr/bin/osascript", "-e", script], timeout=10, capture_output=True)
+            script = ["-e", "on run argv", "-e", "display notification (item 1 of argv) with title (item 2 of argv)",
+                      "-e", "end run"]
+            subprocess.run(["/usr/bin/osascript", *script, message, title], timeout=10, capture_output=True)
     except (OSError, subprocess.TimeoutExpired):
         pass
 
@@ -333,8 +334,13 @@ def is_bot(login: str | None) -> bool:
     return login.endswith("[bot]") or login in {"github-actions", "dependabot", "renovate", "coderabbitai"}
 
 
+def author_of(pr: dict) -> str:
+    # gh pr list 는 봇을 app/github-actions 로, GraphQL 은 github-actions 로 준다
+    return (pr.get("author") or {}).get("login", "").removeprefix("app/")
+
+
 def is_release_pr(cfg: dict, pr: dict) -> bool:
-    author = (pr.get("author") or {}).get("login", "")
+    author = author_of(pr)
     return author in cfg["release_pr_authors"] and re.search(cfg["release_pr_title_pattern"], pr["title"]) is not None
 
 
@@ -391,8 +397,8 @@ def user_work_in(cfg: dict, wt: Path, pr: dict, known_heads: list[str]) -> str |
     branch = git(cfg, "branch", "--show-current", cwd=wt, check=False).stdout.strip()
     if branch:
         return f"브랜치 {branch} 를 체크아웃해 둠"
-    if git(cfg, "status", "--porcelain", "--untracked-files=no", cwd=wt, check=False).stdout.strip():
-        return "고친 파일이 있음"
+    if git(cfg, "status", "--porcelain", cwd=wt, check=False).stdout.strip():
+        return "고치거나 새로 만든 파일이 있음"
     head = git(cfg, "rev-parse", "HEAD", cwd=wt, check=False).stdout.strip()
     # 지난번 체크아웃한 PR 커밋도 기준으로 넣어야 force-push 뒤에 예전 커밋을 사용자 작업으로 오인하지 않는다
     refs = [pr["headRefOid"], *known_heads]
@@ -417,7 +423,8 @@ def prepare_worktree(cfg: dict, repo: str, repo_dir: str, pr: dict, ps: dict) ->
                 log(f"깨진 worktree 를 {aside.name} 로 비켜 둠")
             else:
                 wt.rmdir()
-            git(cfg, "worktree", "prune", cwd=repo_dir, check=False)
+            # prune 은 다른 worktree 기록까지 지울 수 있어 이 자리 하나만 뺀다
+            git(cfg, "worktree", "remove", "--force", str(wt), cwd=repo_dir, check=False)
         else:
             reason = user_work_in(cfg, wt, pr, ps.get("heads", []))
             if reason:
@@ -483,6 +490,8 @@ def claude_args(cfg: dict) -> list[str]:
         "--permission-mode", "dontAsk",
         "--allowedTools", *ALLOWED_TOOLS,
         "--disallowedTools", *DISALLOWED_TOOLS,
+        # PR 이 바꾼 .claude/settings.json 이 권한을 넓히지 못하게 내 설정만 읽는다
+        "--setting-sources", "user",
         "--settings", json.dumps({"disableAllHooks": True}),
         "--output-format", "json",
     ]
@@ -569,7 +578,7 @@ def render_review(repo: str, pr: dict, body: str, session_id: str, wt: Path, sec
 
 
 def should_review(cfg: dict, me: str, pr: dict, ps: dict) -> bool:
-    author = (pr.get("author") or {}).get("login", "")
+    author = author_of(pr)
     if pr.get("isDraft") or is_release_pr(cfg, pr):
         return False
     if (author == me or author in cfg["skip_authors"]) and not is_bot_pr(cfg, pr):
@@ -588,6 +597,12 @@ def record_failure(cfg: dict, state: dict, repo: str, pr: dict, ps: dict, err: s
     if fails[pr["headRefOid"]] >= cfg["max_attempts"] or total >= 2 * cfg["max_attempts"]:
         ps["gave_up"] = iso()
         notify(cfg, state, f"{repo}#{pr['number']} 자동 리뷰 중단", f"반복 실패: {err[:120]}", url=pr["url"])
+
+
+def record_reply_failure(cfg: dict, state: dict, repo: str, pr: dict, ps: dict, err: str) -> None:
+    ps["reply_failures"] = ps.get("reply_failures", 0) + 1
+    ps["last_error"] = err
+    log(f"{repo}#{pr['number']} 답글 리뷰 실패({ps['reply_failures']}/{cfg['max_attempts']}): {err}")
 
 
 def review_pr(cfg: dict, state: dict, repo: str, repo_dir: str, pr: dict) -> None:
@@ -690,6 +705,12 @@ def check_replies(cfg: dict, state: dict, me: str, repo: str, repo_dir: str, pr:
     wt = worktree_path(repo, pr["number"])
     if not wt.exists():
         return
+    if ps.get("reply_failures", 0) >= cfg["max_attempts"]:
+        # 같은 답글에서 계속 실패하면 리뷰는 건너뛰고 알리기만 한다
+        ps["reply_cursor"] = max(c["id"] for c in comments)
+        ps.pop("reply_failures", None)
+        notify(cfg, state, f"{repo}#{pr['number']} 새 답글", f"답글 {len(new)}개 (자동 리뷰 실패, 직접 확인)", url=pr["url"])
+        return
     sent = terminal_send(cfg, wt, " ".join(text.split()))
     if sent is None:
         log(f"{repo}#{pr['number']} 답글: 리뷰 탭 입력창이 비어 있지 않아 다음 폴링으로 미룸")
@@ -702,6 +723,7 @@ def check_replies(cfg: dict, state: dict, me: str, repo: str, repo_dir: str, pr:
         ps["reply_review_file"] = str(reply_file)
     # 일시적 실패면 위에서 예외가 올라가 커서가 그대로 남는다
     ps["reply_cursor"] = max(c["id"] for c in comments)
+    ps.pop("reply_failures", None)
     ps["replied_at"] = iso()
     notify(cfg, state, f"{repo}#{pr['number']} 새 답글", f"답글 {len(new)}개 리뷰", url=pr["url"])
 
@@ -961,13 +983,13 @@ def build_status(cfg: dict, state: dict) -> dict:
             owner, name = repo_slug_cached(cfg, repo_dir).split("/")
             git_dirs[repo] = git(cfg, "rev-parse", "--path-format=absolute", "--git-common-dir",
                                  cwd=repo_dir).stdout.strip()
-            data = gh_json(cfg, ["api", "graphql", "-f", f"query={GRAPHQL}", "-F", f"owner={owner}",
-                                 "-F", f"name={name}"], cwd=repo_dir)
+            data = gh_json(cfg, ["api", "graphql", "-f", f"query={GRAPHQL}", "-f", f"owner={owner}",
+                                 "-f", f"name={name}"], cwd=repo_dir)
         except (Failed, Transient, subprocess.TimeoutExpired) as e:
             errors.append(f"{repo}: {short_error(e)}")
             continue
         for pr in data["data"]["repository"]["pullRequests"]["nodes"]:
-            author = (pr.get("author") or {}).get("login", "")
+            author = author_of(pr)
             ps = state.get("repos", {}).get(repo, {}).get("prs", {}).get(str(pr["number"]), {})
             pr_like = {"title": pr["title"], "author": {"login": author}}
             release = is_release_pr(cfg, pr_like)
@@ -1091,24 +1113,27 @@ def poll_locked(cfg: dict, state: dict) -> None:
                     ps.setdefault("seen_only", iso())
                 ps.pop("reviewing_since", None)
                 continue
+            reviewing = should_review(cfg, me, pr, ps)
+            fail = record_failure if reviewing else record_reply_failure
             try:
-                if should_review(cfg, me, pr, ps):
+                if reviewing:
                     review_pr(cfg, state, repo, repo_dir, pr)
                 elif ps.get("session_id"):
                     check_replies(cfg, state, me, repo, repo_dir, pr)
                 ps.pop("transient_count", None)
             except Transient as e:
                 ps.pop("reviewing_since", None)
-                # 분류가 틀려도 끝없이 쉬지 않게, 같은 PR 에서 연달아 나면 실패로 센다
-                ps["transient_count"] = ps.get("transient_count", 0) + 1
-                if ps["transient_count"] >= 3:
-                    record_failure(cfg, state, repo, pr, ps, short_error(e))
-                    ps.pop("transient_count", None)
+                # 사용 한도는 기다리면 풀리니 세지 않는다. 다른 분류는 틀렸을 수 있어 같은 PR 에서 연달아 나면 실패로 센다
+                if e.kind != "limit":
+                    ps["transient_count"] = ps.get("transient_count", 0) + 1
+                    if ps["transient_count"] >= 3:
+                        fail(cfg, state, repo, pr, ps, short_error(e))
+                        ps.pop("transient_count", None)
                 pause(cfg, state, e)
                 return
             except Exception as e:  # 예상 못 한 오류도 실패로 세서 같은 리뷰를 끝없이 다시 돌지 않게 한다
                 ps.pop("reviewing_since", None)
-                record_failure(cfg, state, repo, pr, ps, short_error(e))
+                fail(cfg, state, repo, pr, ps, short_error(e))
             save_state(state)
         cleanup_closed(cfg, state, repo, repo_dir, {p["number"] for p in prs}, len(prs) >= PR_LIST_LIMIT)
     state.pop("paused_until", None)
@@ -1175,7 +1200,7 @@ def doctor(cfg: dict | None = None) -> list[str]:
     cfg = cfg or load_config()
     problems = []
     # 띠만 쓰면 claude 는 필요 없다
-    names = ("python3", "git", "gh", "claude", "node") if cfg["auto_review"] else ("python3", "git", "gh")
+    names = ("python3", "git", "gh", "claude") if cfg["auto_review"] else ("python3", "git", "gh")
     for name in names:
         exe = find_tool(cfg.get("paths", {}), name)
         if not exe:
