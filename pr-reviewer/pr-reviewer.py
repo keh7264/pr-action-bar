@@ -292,7 +292,7 @@ def notify(cfg: dict, state: dict, title: str, message: str, *, kind: str | None
         else:
             script = ["-e", "on run argv", "-e", "display notification (item 1 of argv) with title (item 2 of argv)",
                       "-e", "end run"]
-            subprocess.run(["/usr/bin/osascript", *script, message, title], timeout=10, capture_output=True)
+            subprocess.run(["/usr/bin/osascript", *script, "--", message, title], timeout=10, capture_output=True)
     except (OSError, subprocess.TimeoutExpired):
         pass
 
@@ -339,9 +339,13 @@ def author_of(pr: dict) -> str:
     return (pr.get("author") or {}).get("login", "").removeprefix("app/")
 
 
+def in_authors(author: str, names: list[str]) -> bool:
+    return author in {n.removeprefix("app/") for n in names}
+
+
 def is_release_pr(cfg: dict, pr: dict) -> bool:
     author = author_of(pr)
-    return author in cfg["release_pr_authors"] and re.search(cfg["release_pr_title_pattern"], pr["title"]) is not None
+    return in_authors(author, cfg["release_pr_authors"]) and re.search(cfg["release_pr_title_pattern"], pr["title"]) is not None
 
 
 def is_bot_pr(cfg: dict, pr: dict) -> bool:
@@ -397,7 +401,8 @@ def user_work_in(cfg: dict, wt: Path, pr: dict, known_heads: list[str]) -> str |
     branch = git(cfg, "branch", "--show-current", cwd=wt, check=False).stdout.strip()
     if branch:
         return f"브랜치 {branch} 를 체크아웃해 둠"
-    if git(cfg, "status", "--porcelain", cwd=wt, check=False).stdout.strip():
+    changed = git(cfg, "status", "--porcelain", cwd=wt, check=False).stdout.splitlines()
+    if [line for line in changed if not line.endswith(".DS_Store")]:
         return "고치거나 새로 만든 파일이 있음"
     head = git(cfg, "rev-parse", "HEAD", cwd=wt, check=False).stdout.strip()
     # 지난번 체크아웃한 PR 커밋도 기준으로 넣어야 force-push 뒤에 예전 커밋을 사용자 작업으로 오인하지 않는다
@@ -485,6 +490,9 @@ def prompt(name: str, **values: str) -> str:
 # ───────────────────────── 헤드리스 Claude ─────────────────────────
 
 
+RESUME = "claude --setting-sources user --resume"
+
+
 def claude_args(cfg: dict) -> list[str]:
     return [
         "--permission-mode", "dontAsk",
@@ -498,6 +506,7 @@ def claude_args(cfg: dict) -> list[str]:
 
 
 HEARTBEAT_SECONDS = 300
+LIMIT_STREAK = 12  # 사용 한도로 30분씩 12번(6시간) 쉬어도 같은 PR 이면 실패 한 번으로 센다
 _heartbeat = None  # 긴 claude 실행 중 주기적으로 부를 함수 (status.json 갱신)
 
 
@@ -567,7 +576,7 @@ def render_review(repo: str, pr: dict, body: str, session_id: str, wt: Path, sec
         "",
         f"- PR: {pr['url']}",
         f"- 커밋: `{pr['headRefOid'][:9]}` · 리뷰: {now():%Y-%m-%d %H:%M} · {seconds // 60}분 {seconds % 60}초 · {tally}",
-        f"- 이어서 대화: `cd {wt} && claude --resume {session_id}`",
+        f"- 이어서 대화: `cd {wt} && {RESUME} {session_id}`",
         "",
         body.strip(),
     ]
@@ -581,7 +590,7 @@ def should_review(cfg: dict, me: str, pr: dict, ps: dict) -> bool:
     author = author_of(pr)
     if pr.get("isDraft") or is_release_pr(cfg, pr):
         return False
-    if (author == me or author in cfg["skip_authors"]) and not is_bot_pr(cfg, pr):
+    if (author == me or in_authors(author, cfg["skip_authors"])) and not is_bot_pr(cfg, pr):
         return False
     if ps.get("reviewed_at") or ps.get("seen_only") or ps.get("gave_up"):
         return False  # 한 번 리뷰한 PR 은 새 커밋이 와도 다시 리뷰하지 않는다
@@ -691,6 +700,7 @@ def check_replies(cfg: dict, state: dict, me: str, repo: str, repo_dir: str, pr:
     if not new:
         if comments:
             ps["reply_cursor"] = max(cursor, max(c["id"] for c in comments))
+        ps.pop("reply_failures", None)
         return
     threads = sorted({c["in_reply_to_id"] for c in new})
     body = []
@@ -717,7 +727,12 @@ def check_replies(cfg: dict, state: dict, me: str, repo: str, repo_dir: str, pr:
         return
     if not sent:
         # 원래 세션은 사용자가 열어 둘 수 있으니 갈라서 이어 간다
-        out = claude(cfg, wt, text, resume=ps["session_id"], fork=True, timeout_minutes=15)
+        try:
+            out = claude(cfg, wt, text, resume=ps["session_id"], fork=True, timeout_minutes=15)
+        except (Failed, subprocess.TimeoutExpired) as e:
+            # 답글 리뷰가 실패한 것만 센다. 조회 실패는 다음 폴링에 다시 한다
+            record_reply_failure(cfg, state, repo, pr, ps, short_error(e))
+            return
         reply_file = thread_file.with_name(thread_file.stem + "-review.md")
         write_atomic(reply_file, str(out.get("result", "")))
         ps["reply_review_file"] = str(reply_file)
@@ -782,7 +797,7 @@ def terminal_prepare(cfg: dict, wt: Path, sid: str, title: str, repo_dir: str, b
         return
     # --focus 를 주지 않으면 포커스를 가져가지 않는다
     orca(cfg, "terminal", "create", "--worktree", f"path:{wt}", "--title", title,
-         "--command", f"claude --resume {sid}")
+         "--command", f"{RESUME} {sid}")
 
 
 def terminal_send(cfg: dict, wt: Path, text: str) -> bool | None:
@@ -1005,7 +1020,7 @@ def build_status(cfg: dict, state: dict) -> dict:
             elif pr["isDraft"]:
                 action = None  # 남의 Draft 는 아직 리뷰할 단계가 아니다
             else:
-                action = team_action(pr, me, ps, reviewable and author not in cfg["skip_authors"])
+                action = team_action(pr, me, ps, reviewable and not in_authors(author, cfg["skip_authors"]))
             issue_key, issue_url = issue_of(cfg, pr["headRefName"], pr["title"])
             opens, page_url = opens_for(cfg, repo, repo_dir, pr, mine, action or "", ps)
             entry = {
@@ -1114,7 +1129,6 @@ def poll_locked(cfg: dict, state: dict) -> None:
                 ps.pop("reviewing_since", None)
                 continue
             reviewing = should_review(cfg, me, pr, ps)
-            fail = record_failure if reviewing else record_reply_failure
             try:
                 if reviewing:
                     review_pr(cfg, state, repo, repo_dir, pr)
@@ -1123,17 +1137,19 @@ def poll_locked(cfg: dict, state: dict) -> None:
                 ps.pop("transient_count", None)
             except Transient as e:
                 ps.pop("reviewing_since", None)
-                # 사용 한도는 기다리면 풀리니 세지 않는다. 다른 분류는 틀렸을 수 있어 같은 PR 에서 연달아 나면 실패로 센다
-                if e.kind != "limit":
-                    ps["transient_count"] = ps.get("transient_count", 0) + 1
-                    if ps["transient_count"] >= 3:
-                        fail(cfg, state, repo, pr, ps, short_error(e))
-                        ps.pop("transient_count", None)
+                # 분류가 틀려도 끝없이 쉬지 않게 같은 PR 에서 연달아 나면 실패로 센다. 사용 한도는 몇 시간 이어질 수 있어 넉넉히 기다린다
+                ps["transient_count"] = ps.get("transient_count", 0) + 1
+                if ps["transient_count"] >= (LIMIT_STREAK if e.kind == "limit" else 3):
+                    (record_failure if reviewing else record_reply_failure)(cfg, state, repo, pr, ps, short_error(e))
+                    ps.pop("transient_count", None)
                 pause(cfg, state, e)
                 return
             except Exception as e:  # 예상 못 한 오류도 실패로 세서 같은 리뷰를 끝없이 다시 돌지 않게 한다
                 ps.pop("reviewing_since", None)
-                fail(cfg, state, repo, pr, ps, short_error(e))
+                if reviewing:
+                    record_failure(cfg, state, repo, pr, ps, short_error(e))
+                else:
+                    log(f"{repo}#{pr['number']} 답글 확인 실패: {short_error(e)}")
             save_state(state)
         cleanup_closed(cfg, state, repo, repo_dir, {p["number"] for p in prs}, len(prs) >= PR_LIST_LIMIT)
     state.pop("paused_until", None)
@@ -1170,7 +1186,7 @@ def open_pr(repo: str, number: int, mine: bool) -> int:
     if has_review_session(cfg, repo, number, ps):
         if repo in cfg["repos"]:
             orca_nest(cfg, wt, cfg["repos"][repo], None, number)
-        if open_in_terminal(cfg, wt, f"claude --resume {ps['session_id']}", f"{repo}#{number}"):
+        if open_in_terminal(cfg, wt, f"{RESUME} {ps['session_id']}", f"{repo}#{number}"):
             return 0
     if url:
         subprocess.run(["/usr/bin/open", url], timeout=10)
