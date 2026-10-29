@@ -15,9 +15,9 @@ PR 상태를 Slack 알림 대신 Claude Code 입력창 바로 위에 띄우고, 
 두 부분으로 되어 있다.
 
 - `pr-reviewer/`: launchd로 5분마다 도는 파이썬 스크립트다. 열린 PR 상태를 `~/.pr-reviewer/status.json`에 써 두고, 새 PR이 보이면 PR 전용 worktree에서 헤드리스 Claude Code로 리뷰를 돌린다. 내 리뷰 코멘트에 답글이 달려도 다시 봐 둔다.
-- `review-buttons/`: 그 파일을 30초마다 읽어서 입력창 위에 띠로 그리는 Claude Code mod다. PR 번호를 누르면 리뷰 세션 탭이나 작업하던 탭, 아니면 PR 페이지로 간다.
+- `review-buttons/`: 그 파일을 30초마다 읽어서 입력창 위에 띠로 그리는 Claude Code mod(플러그인)다. PR 번호를 누르면 리뷰 세션 탭이나 작업하던 탭, 아니면 PR 페이지로 간다.
 
-리뷰는 PR에 올리지 않는다. 어떤 코멘트를 달지는 내가 정하고 싶어서다. 리뷰 파일에서 복사해 붙이거나, 리뷰 세션 탭에서 같이 보고 "이거 달아 줘"라고 시키면 된다. 그래서 리뷰를 돌릴 때는 읽기 전용 도구만 허용한다.
+리뷰는 PR에 올리지 않는다. 어떤 코멘트를 달지는 내가 정한다. 리뷰 파일에서 복사해 붙이거나, 리뷰 세션 탭에서 같이 보고 "이거 달아 줘"라고 시키면 된다. 그래서 리뷰를 돌릴 때는 읽기 전용 도구만 허용한다.
 
 ## 필요한 것
 
@@ -26,11 +26,11 @@ PR 상태를 Slack 알림 대신 Claude Code 입력창 바로 위에 띄우고, 
 - [Claude Code](https://claude.com/claude-code). mod를 지원하는 버전이어야 하고, 자동 리뷰를 쓰면 `/code-review` 스킬도 있어야 한다
 - 있으면 좋은 것: `terminal-notifier` (알림을 누르면 PR이 열린다. `setup`이 brew로 깔아 준다), Orca (리뷰 세션을 탭으로 연다)
 
-## 띠만 쓸 수도 있다
+## Mod만 쓸 수도 있다
 
-리뷰는 필요 없고 상태만 보고 싶으면 설정에서 `"auto_review": false`로 두면 된다. 그러면 GitHub 상태만 받아서 띠에 띄우고 리뷰는 돌리지 않으니, 리뷰에 드는 Claude 사용량이 없다. 띠는 Claude Code 안에 그려지는 거라 Claude Code는 당연히 있어야 한다.
+리뷰는 필요 없고 상태만 보고 싶으면 설정에서 `"auto_review": false`로 두면 된다. 그러면 GitHub 상태만 받아서 띠에 띄우고 리뷰는 돌리지 않으니, 리뷰에 드는 Claude 사용량이 없다. 띠가 Claude Code 안에 그려지니 Claude Code는 있어야 한다.
 
-이때도 pr-reviewer는 설치해야 한다. GitHub 조회는 pr-reviewer 한 곳에서만 하고 mod는 `status.json`만 읽기 때문이다. 띠만 쓰는 동안 열린 PR은 "본 것"으로 기록해 두니까, 나중에 `auto_review`를 켜도 밀린 PR을 한꺼번에 리뷰하지 않고 그 뒤에 올라온 PR부터 리뷰한다.
+이때도 pr-reviewer는 설치해야 한다. GitHub 조회는 pr-reviewer 한 곳에서만 하고 mod는 `status.json`만 읽기 때문이다. mod만 쓰는 동안 열린 PR은 "본 것"으로 기록해 두니까, 나중에 `auto_review`를 켜도 밀린 PR을 한꺼번에 리뷰하지 않고 그 뒤에 올라온 PR부터 리뷰한다.
 
 ## 설치
 
@@ -45,7 +45,7 @@ python3 pr-reviewer/pr-reviewer.py setup
 `setup`이 차례로 묻는다.
 
 1. 리뷰할 레포. Orca에 등록된 레포가 있으면 번호로 고르고, 없으면 경로를 적는다. 띠에 붙을 짧은 이름도 정한다.
-2. 자동 리뷰를 쓸지. 끄면 띠만 쓴다. 켜면 `/code-review high`(설정의 `effort`, 기본 high)로 리뷰하고, 지적마다 실제로 터지는지 한 번 더 검증한 뒤에 알린다.
+2. 자동 리뷰를 쓸지. 끄면 mod만 쓴다. 켜면 `/code-review high`(설정의 `effort`, 기본 high)로 리뷰하고, 지적마다 실제로 터지는지 한 번 더 검증한 뒤에 알린다.
 3. PR을 누르면 Orca 탭으로 갈지. 그러면 레포를 Orca에 등록하고 바깥 worktree도 보이게 켜 둔다.
 4. `terminal-notifier`가 없으면 brew로 설치할지. 있어야 알림을 눌러 PR을 연다. 없으면 맥 기본 알림만 뜬다.
 5. 이슈 링크 템플릿과 이슈 프로젝트 키.
@@ -54,7 +54,7 @@ python3 pr-reviewer/pr-reviewer.py setup
 
 `install`은 `gh`, `git`, `claude` 같은 도구의 절대 경로를 찾아 설정에 적어 둔다. launchd는 로그인 셸의 PATH를 모르기 때문에, nvm이나 fnm으로 깐 claude를 이렇게 안 해 주면 못 찾는다. 그다음 도구들이 실제로 돌아가는지, `gh`가 로그인돼 있는지, 레포마다 비밀번호 없이 `git ls-remote`가 되는지(VPN이 필요한 회사 레포 때문에) 확인한다. 스크립트는 `~/.pr-reviewer/bin/`에 복사해 두고 launchd는 그 복사본을 돌린다. 그래서 레포를 업데이트하면 `install`을 한 번 더 돌려야 한다.
 
-처음 보는 레포에 이미 열려 있던 PR은 리뷰하지 않는다. 설치하자마자 PR 수십 개를 한 번에 리뷰해서 사용량이 바닥나는 걸 막으려고 그렇게 했다.
+처음 보는 레포에 이미 열려 있던 PR은 리뷰하지 않는다. 설치하자마자 수십 개를 한꺼번에 리뷰하면 사용량이 금방 바닥난다.
 
 ### review-buttons
 
@@ -71,7 +71,7 @@ claude plugin install review-buttons@pr-action-bar
 
 | 키 | 기본값 | 설명 |
 |---|---|---|
-| `auto_review` | `true` | `false`면 띠만 쓴다 |
+| `auto_review` | `true` | `false`면 mod만 쓴다 |
 | `repos` | `{}` | `{"짧은이름": "로컬 경로"}`. 짧은 이름이 띠에 `repo-a#1234`처럼 붙는다 |
 | `effort` | `high` | `/code-review`에 넘길 레벨 |
 | `timeout_minutes` | `40` | 리뷰 한 단계에 쓸 수 있는 시간 |
@@ -123,15 +123,13 @@ orca repo add --path ~/work/app
 orca repo set --repo path:$HOME/work/app --external-worktree-visibility show
 ```
 
-리뷰 worktree는 Orca 사이드바에서 그 레포의 기본 브랜치 worktree 아래에 `#1235 리뷰` 같은 이름으로 들어간다. 리뷰 세션이 많아져도 작업하던 worktree와 섞이지 않게 하려고 그렇게 했다. 기본 브랜치를 체크아웃한 worktree가 Orca에 없으면 `repos`에 적은 경로 아래로 넣는다.
+리뷰 worktree는 Orca 사이드바에서 그 레포의 기본 브랜치 worktree 아래에 `#1235 리뷰` 같은 이름으로 들어간다. 그래서 리뷰가 쌓여도 작업하던 worktree와 섞이지 않는다. 기본 브랜치를 체크아웃한 worktree가 Orca에 없으면 `repos`에 적은 경로 아래로 넣는다.
 
 리뷰 탭을 처음 열 때 Claude Code가 이 폴더를 믿을지 한 번 물어본다.
 
 내 리뷰에 답글이 달리면, 열려 있는 리뷰 탭의 입력창이 비어 있을 때만 그 탭에 프롬프트를 넣는다. 뭔가 쓰고 있던 중이면 다음 폴링까지 기다린다. 탭이 없으면 원래 세션을 갈라서(`--fork-session`) 뒤에서 돌린다.
 
 ## 실패했을 때
-
-다른 사람 맥에서 돌려도, 중간에 실패해도 망가지지 않게 신경 쓴 부분이 있다.
 
 사용 한도나 네트워크, 로그인 문제로 실패하면 PR 하나의 문제가 아니라서 리뷰 전체를 30분 쉬고, 이건 실패 횟수로 세지 않는다. 리뷰하기 직전에는 PR을 한 번 더 조회해서 그사이 닫혔거나 Draft가 됐거나 커밋이 새로 왔는지 본다. 리뷰하는 동안은 맥이 잠들지 않게 하고, 리뷰가 길어져도 띠가 멈춰 보이지 않게 5분마다 상태를 갱신한다.
 
