@@ -157,12 +157,15 @@ worktree에 내가 고치거나 새로 만든 파일(`.DS_Store`는 빼고), 다
 
 ```sh
 python3 ~/.pr-reviewer/bin/pr-reviewer.py              # 폴링 한 번
+python3 ~/.pr-reviewer/bin/pr-reviewer.py repo-a 1235   # 그 PR을 지금 리뷰 (이미 리뷰했거나 자동 리뷰가 멈췄어도 다시)
 python3 ~/.pr-reviewer/bin/pr-reviewer.py --refresh     # status.json만 바로 갱신 (--full이면 리뷰 폴링도 같이)
 python3 ~/.pr-reviewer/bin/pr-reviewer.py --open repo-a 1235 [--mine]
 python3 ~/.pr-reviewer/bin/pr-reviewer.py setup         # 설정을 묻고 답하며 다시 고친다
 python3 ~/.pr-reviewer/bin/pr-reviewer.py doctor        # 설치 상태만 점검
 python3 ~/.pr-reviewer/bin/pr-reviewer.py uninstall     # launchd에서 뺀다 (기록과 worktree는 남는다)
 ```
+
+`repo-a 1235`처럼 PR을 지정하면 `~/.pr-reviewer/queue/`에 요청을 넣고 launchd 폴링을 바로 깨운다. 리뷰는 뒤에서 돌고 끝나면 알림이 온다. 폴링이 이미 돌고 있으면 그 루프가 30초 안에 가져간다. `auto_review`가 꺼져 있어도 지정한 PR은 리뷰한다.
 
 로그는 `~/.pr-reviewer/logs/pr-reviewer.log`, 리뷰 파일은 `~/.pr-reviewer/reviews/<repo>/<번호>-<커밋>.md`(JSON은 같은 이름의 `.json`)에 쌓인다. 리뷰 탭의 마지막 답은 JSON이라, 읽기 좋은 모양은 띠의 "리뷰 파일"로 본다.
 

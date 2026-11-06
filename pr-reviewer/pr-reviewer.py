@@ -8,6 +8,7 @@ launchd 가 poll_minutes(기본 5분)마다 `pr-reviewer.py` 를 실행한다. �
 
 표준 라이브러리만 쓴다. 하위 명령:
   pr-reviewer.py                       정규 폴링 1회 (launchd 가 부른다)
+  pr-reviewer.py REPO N                그 PR 을 지금 리뷰 (이미 리뷰했어도 다시)
   pr-reviewer.py --refresh [--full]    status.json 즉시 갱신 (--full: 정규 폴링도 kickstart)
   pr-reviewer.py --open REPO N [--mine]  PR 의 리뷰 세션/작업 탭/PR 페이지 열기
   pr-reviewer.py setup                 묻고 답하며 설정한 뒤 설치
@@ -45,6 +46,7 @@ LOGS = ROOT / "logs"
 BIN = ROOT / "bin"
 LOCK = ROOT / "poll.lock"
 REFRESH_LOCK = ROOT / "refresh.lock"
+QUEUE = ROOT / "queue"  # 바로 리뷰할 PR 요청 (pr-reviewer.py REPO N)
 LABEL = "dev.pr-reviewer.poll"
 PLIST = HOME / "Library/LaunchAgents" / f"{LABEL}.plist"
 
@@ -1528,7 +1530,21 @@ def poll() -> int:
     return 0
 
 
-WAKE_SECONDS = 30  # 리뷰가 도는 동안 끝난 리뷰를 확인하는 간격
+WAKE_SECONDS = 30  # 리뷰가 도는 동안 끝난 리뷰와 바로 리뷰 요청을 확인하는 간격
+
+
+def queued() -> set[tuple[str, int]]:
+    """바로 리뷰해 달라는 요청. 파일 이름이 <레포>#<번호> 다."""
+    out = set()
+    for f in QUEUE.glob("*#*") if QUEUE.exists() else []:
+        repo, _, num = f.name.rpartition("#")
+        if num.isdigit():
+            out.add((repo, int(num)))
+    return out
+
+
+def unqueue(repo: str, number: int) -> None:
+    (QUEUE / f"{repo}#{number}").unlink(missing_ok=True)
 
 
 def poll_locked(cfg: dict, state: dict) -> None:
@@ -1558,7 +1574,9 @@ def poll_locked(cfg: dict, state: dict) -> None:
                 err = running.pop(k).exception()
                 if err:  # review_worker 가 다 받아 내지만, 상태 저장 실패 같은 것은 로그로 남긴다
                     log(f"{k[0]}#{k[1]} 리뷰 스레드 오류: {short_error(err)}")
-            if finished or time.time() - last_pass >= cfg["poll_minutes"] * 60:
+            waiting = [k for k in queued() if k not in running]
+            room = len(running) < cfg["max_parallel_reviews"]
+            if finished or time.time() - last_pass >= cfg["poll_minutes"] * 60 or (waiting and room):
                 poll_pass(cfg, state, me, pool, running)
                 save_state(state)
                 write_status_safely(cfg, state)
@@ -1576,6 +1594,12 @@ def poll_locked(cfg: dict, state: dict) -> None:
 def poll_pass(cfg: dict, state: dict, me: str, pool: futures.Executor,
               running: dict[tuple[str, int], futures.Future]) -> None:
     """레포마다 열린 PR 을 보고, 리뷰할 PR 은 빈자리만큼 리뷰 스레드에 넘기고, 나머지는 답글 · 피드백을 확인한다."""
+    asked = queued()
+    for repo, _ in asked:
+        if repo not in cfg["repos"]:
+            log(f"바로 리뷰 요청 무시: 설정에 없는 레포 {repo}")
+            for key in [k for k in asked if k[0] == repo]:
+                unqueue(*key)
     for repo, repo_dir in cfg["repos"].items():
         if paused(state):
             log(f"쉬는 중({state.get('pause_kind')}) — {state['paused_until']} 까지")
@@ -1595,12 +1619,26 @@ def poll_pass(cfg: dict, state: dict, me: str, pool: futures.Executor,
                 pr_state(state, repo, pr["number"])["seen_only"] = iso()
             rs["seen_initial"] = iso()
             log(f"{repo}: 처음 보는 레포 — 열린 PR {len(prs)}개를 본 것으로 기록")
-            continue
+            if not any(r == repo for r, _ in asked):
+                continue  # 바로 리뷰 요청이 있으면 그 PR 만 아래에서 리뷰한다
+        open_numbers = {p["number"] for p in prs}
+        for key in [k for k in asked if k[0] == repo and k[1] not in open_numbers]:
+            log(f"{key[0]}#{key[1]} 바로 리뷰 요청 무시: 열린 PR 이 아니다")
+            unqueue(*key)
         for pr in prs:
             key = (repo, pr["number"])
             if key in running:
                 continue  # 리뷰 스레드가 맡고 있는 PR 은 건드리지 않는다
             ps = pr_state(state, repo, pr["number"])
+            if key in asked:
+                # 바로 리뷰 요청은 리뷰 여부 · auto_review 와 상관없이 돌린다
+                if len(running) < cfg["max_parallel_reviews"]:
+                    ps.pop("gave_up", None)
+                    ps.pop("failures", None)
+                    unqueue(*key)
+                    log(f"{repo}#{pr['number']} 바로 리뷰 시작")
+                    running[key] = pool.submit(review_worker, cfg, state, repo, repo_dir, pr)
+                continue
             if not cfg["auto_review"]:
                 # 리뷰만 끈다. 그사이 열린 PR 은 본 것으로 기록해 나중에 다시 켜도 한꺼번에 리뷰하지 않는다
                 if not ps.get("reviewed_at"):
@@ -1666,6 +1704,22 @@ def refresh(full: bool) -> int:
                            capture_output=True, timeout=10)
         write_json(STATUS, build_status(cfg, read_json(STATE, {})))
     return 0
+
+
+def review_now(repo: str, number: int) -> int:
+    cfg = load_config()
+    if repo not in cfg["repos"]:
+        print(f"{repo} 는 설정에 없는 레포다. 레포: {', '.join(cfg['repos']) or '(없음)'}", file=sys.stderr)
+        return 1
+    QUEUE.mkdir(parents=True, exist_ok=True)
+    write_atomic(QUEUE / f"{repo}#{number}", iso() + "\n")
+    if PLIST.exists():
+        # launchd 로 띄우면 이 명령은 바로 끝나고 리뷰는 뒤에서 돈다. 이미 폴링이 돌고 있으면 그 루프가 가져간다
+        subprocess.run(["/bin/launchctl", "kickstart", f"gui/{os.getuid()}/{LABEL}"], capture_output=True, timeout=10)
+        print(f"{repo}#{number} 리뷰를 요청했다. 끝나면 알림이 온다. 로그: {LOGS / 'pr-reviewer.log'}")
+        return 0
+    print(f"{repo}#{number} 리뷰를 시작한다 (launchd 에 설치돼 있지 않아 여기서 돈다)")
+    return poll()
 
 
 def open_pr(repo: str, number: int, mine: bool) -> int:
@@ -2001,12 +2055,19 @@ def uninstall() -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", nargs="?", choices=["poll", "setup", "install", "uninstall", "doctor"], default="poll")
+    ap.add_argument("command", nargs="*", default=["poll"],
+                    help="poll | setup | install | uninstall | doctor | <레포> <PR 번호>")
     ap.add_argument("--refresh", action="store_true")
     ap.add_argument("--full", action="store_true")
     ap.add_argument("--open", nargs=2, metavar=("REPO", "NUMBER"))
     ap.add_argument("--mine", action="store_true")
     args = ap.parse_args()
+    words = args.command
+    if len(words) == 2 and words[1].isdigit():
+        return review_now(words[0], int(words[1]))
+    if len(words) != 1 or words[0] not in ("poll", "setup", "install", "uninstall", "doctor"):
+        ap.error(f"모르는 명령: {' '.join(words)}")
+    args.command = words[0]
     try:
         if args.refresh:
             return refresh(args.full)

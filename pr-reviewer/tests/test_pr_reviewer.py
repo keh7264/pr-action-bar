@@ -33,6 +33,7 @@ class Base(unittest.TestCase):
     def setUp(self):
         self.home = Path(tempfile.mkdtemp(prefix="prr-test-"))
         self.m = load(self.home)
+        self.m.PLIST = self.home / "launchd.plist"  # 이 맥에 설치된 진짜 launchd 작업을 건드리지 않게
 
     def tearDown(self):
         shutil.rmtree(self.home, ignore_errors=True)
@@ -489,6 +490,54 @@ class ParallelReviews(Base):
     def test_같은_레포는_같은_잠금(self):
         self.assertIs(self.m.repo_lock("/a"), self.m.repo_lock("/a"))
         self.assertIsNot(self.m.repo_lock("/a"), self.m.repo_lock("/b"))
+
+
+class ReviewNow(ParallelReviews):
+    """pr-reviewer.py REPO N: 큐에 넣고 폴링이 가져간다."""
+
+    def ask(self, repo: str, n: int):
+        self.m.QUEUE.mkdir(parents=True, exist_ok=True)
+        (self.m.QUEUE / f"{repo}#{n}").write_text("x")
+
+    def test_이미_리뷰한_PR_도_요청하면_다시_리뷰한다(self):
+        self.state["repos"]["app"]["prs"] = {str(n): {"reviewed_at": "old", "session_id": "s"} for n in (1, 2, 3)}
+        self.state["repos"]["app"]["prs"]["2"]["gave_up"] = "x"
+        self.ask("app", 2)
+        self.m.poll_locked(self.cfg, self.state)
+        ps = self.state["repos"]["app"]["prs"]["2"]
+        self.assertEqual((ps["reviewed_at"], ps.get("gave_up")), ("done", None))
+        self.assertEqual(self.state["repos"]["app"]["prs"]["1"]["reviewed_at"], "old")
+        self.assertEqual(self.m.queued(), set())
+
+    def test_auto_review_가_꺼져도_요청한_PR_은_리뷰한다(self):
+        self.cfg["auto_review"] = False
+        self.ask("app", 3)
+        self.m.poll_locked(self.cfg, self.state)
+        self.assertEqual(self.state["repos"]["app"]["prs"]["3"]["reviewed_at"], "done")
+        self.assertNotIn("reviewed_at", self.state["repos"]["app"]["prs"]["1"])
+
+    def test_닫힌_PR_과_모르는_레포_요청은_버린다(self):
+        self.state["repos"]["app"]["prs"] = {str(n): {"reviewed_at": "old"} for n in (1, 2, 3)}
+        self.ask("app", 99)
+        self.ask("nope", 1)
+        self.m.poll_locked(self.cfg, self.state)
+        self.assertEqual(self.m.queued(), set())
+        self.assertEqual(self.peak, 0)
+
+    def test_처음_보는_레포여도_요청한_PR_은_리뷰한다(self):
+        self.state = {}
+        self.ask("app", 1)
+        self.m.poll_locked(self.cfg, self.state)
+        prs = self.state["repos"]["app"]["prs"]
+        self.assertEqual(prs["1"]["reviewed_at"], "done")
+        self.assertNotIn("reviewed_at", prs["2"])
+
+    def test_명령은_큐에_넣고_launchd_가_없으면_바로_돈다(self):
+        ran = []
+        self.m.poll = lambda: ran.append(sorted(self.m.queued())) or 0
+        self.assertEqual(self.m.review_now("app", 7), 0)
+        self.assertEqual(ran, [[("app", 7)]])
+        self.assertEqual(self.m.review_now("nope", 7), 1)
 
 
 def re_find_path(text: str) -> str:
