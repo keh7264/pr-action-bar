@@ -85,12 +85,14 @@ claude plugin install review-buttons@pr-action-bar
 | `notify_every_hours` | `3` | 같은 "쉬는 중" 알림을 다시 보내는 간격 |
 | `terminal` | `none` | `none` 또는 `orca` |
 | `language` | `ko` | 리뷰를 정리할 언어 |
+| `review_instructions` | `""` | 팀 리뷰 기준. 리뷰 세션 시스템 프롬프트에 붙어 모든 단계에 들어간다 |
+| `extra_dirs` | `[]` | 리뷰 세션이 읽을 수 있게 열어 줄 폴더(`--add-dir`). `repos`의 로컬 클론은 원래 열고, 레포 위치도 시스템 프롬프트에 적어 준다 |
 | `issue_url_template` | `""` | This PR 줄의 이슈 링크. 예: `https://your-team.atlassian.net/browse/{key}`. 비워 두면 이슈 버튼이 안 나온다 |
 | `issue_projects` | `[]` | 이슈 키로 칠 프로젝트, 예: `["SHOP"]`. 비워 두면 `ABC-123` 모양은 다 잡아서 `UTF-8` 같은 것도 걸릴 수 있으니 적어 두는 게 좋다 |
 
 ### 프롬프트를 바꾸고 싶으면
 
-`~/.pr-reviewer/prompts/<이름>.md`에 파일을 두면 기본 프롬프트 대신 그걸 쓴다. 이름은 `review`, `recheck`, `recheck_bot`, `summarize`, `summarize_bot`, `reply`다. 팀 리뷰 기준만 덧붙이고 싶으면 `extra-criteria.md`에 적으면 재검토 단계에 들어간다.
+`~/.pr-reviewer/prompts/<이름>.md`에 파일을 두면 기본 프롬프트 대신 그걸 쓴다. 이름은 `review`, `recheck`, `recheck_bot`, `summarize`, `summarize_bot`, `reply`, `system`이다. `system`은 리뷰 세션 시스템 프롬프트에 덧붙는 글이고 `{{REPOS}}`(로컬 클론 목록)와 `{{INSTRUCTIONS}}`(`review_instructions`)를 쓸 수 있다. 팀 리뷰 기준은 설정의 `review_instructions`에 적으면 모든 단계에 들어가고, `extra-criteria.md`에 적으면 재검토 단계에만 들어간다.
 
 프롬프트 안에서는 `{{NUMBER}}`, `{{EFFORT}}`, `{{LANGUAGE}}`, `{{THREAD_FILE}}`, `{{COMMITS}}`, `{{EXTRA_CRITERIA}}`, `{{FORMAT}}`을 쓸 수 있다. `{{COMMITS}}`는 `reply`에서 쓰고, 지난 리뷰 뒤에 올라온 커밋 목록(base 머지 제외)이 들어간다. `summarize`는 JSON(`pr_summary`, `findings`)으로 답하게 돼 있고, 스크립트가 그걸 읽어 리뷰 파일(마크다운)을 그리고 분류(꼭 수정 · 자잘한 수정 · 넘겨도 됨)를 센다. JSON 모양이 깨지면 원문을 그대로 리뷰 파일에 두고 알림과 리뷰 파일 머리에 "형식 확인 필요"라고 적는다. 그래서 프롬프트를 바꾸더라도 `{{FORMAT}}`은 남겨 둔다. 읽어 낸 JSON은 리뷰 파일 옆에 `<번호>-<커밋>.json`으로 같이 둔다.
 

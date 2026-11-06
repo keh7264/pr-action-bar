@@ -18,6 +18,8 @@
   "terminal": "none",
   "terminal_timeout_seconds": 5,
   "language": "ko",
+  "review_instructions": "",
+  "extra_dirs": [],
   "issue_url_template": "",
   "issue_projects": []
 }

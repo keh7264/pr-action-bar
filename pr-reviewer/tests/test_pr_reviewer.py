@@ -243,7 +243,7 @@ class ReviewFormat(Base):
     pr = {"number": 1, "title": "feat: x", "url": "u", "headRefOid": "a" * 40}
 
     def render(self, raw: str):
-        return self.m.render_review("app", self.pr, raw, "sid", Path("/wt"), 65)
+        return self.m.render_review(self.config(repos={}), "app", self.pr, raw, "sid", Path("/wt"), 65)
 
     def test_JSON_을_마크다운으로_그리고_분류를_센다(self):
         text, data = self.render(json.dumps(REVIEW_JSON, ensure_ascii=False))
@@ -313,6 +313,45 @@ class ReviewFlow(Base):
         self.m.review_pr(self.cfg, self.state, "app", "/repo", self.pr)
         self.assertEqual(self.notes, ["app#1 리뷰 완료 (형식 확인 필요)"])
         self.assertFalse(self.state["repos"]["app"]["prs"]["1"]["format_ok"])
+
+
+class SystemPrompt(Base):
+    def setUp(self):
+        super().setUp()
+        self.app, self.api, self.docs = (self.home / n for n in ("app", "api", "docs"))
+        for d in (self.app, self.api, self.docs):
+            d.mkdir()
+        self.cfg = self.config(repos={"app": str(self.app), "api": str(self.api)}, extra_dirs=[str(self.docs)],
+                               review_instructions="금액은 BigDecimal 로만 다룬다")
+
+    def arg(self, args: list[str], flag: str) -> str:
+        return args[args.index(flag) + 1]
+
+    def test_로컬_클론_위치와_팀_기준을_시스템_프롬프트에_넣는다(self):
+        args = self.m.claude_args(self.cfg, "app")
+        text = self.arg(args, "--append-system-prompt")
+        self.assertIn(f"- app (이 PR 의 레포): {self.app}", text)
+        self.assertIn(f"- api: {self.api}", text)
+        self.assertIn(f"- 참고 폴더: {self.docs}", text)
+        self.assertIn("금액은 BigDecimal 로만 다룬다", text)
+
+    def test_다른_레포와_참고_폴더를_add_dir_로_연다(self):
+        args = self.m.claude_args(self.cfg, "app")
+        i = args.index("--add-dir")
+        self.assertEqual(args[i + 1:i + 4], [str(self.app), str(self.api), str(self.docs)])
+        self.assertEqual(args[i + 4], "--output-format")
+
+    def test_없는_폴더는_빼고_리뷰_탭_명령에도_연다(self):
+        cfg = self.config(repos={"app": str(self.app)}, extra_dirs=["/nope"])
+        self.assertEqual(self.m.read_dirs(cfg), [str(self.app)])
+        self.assertTrue(self.m.resume_command(cfg, "sid").endswith(f"--resume sid --add-dir {self.app}"))
+
+    def test_system_md_가_있으면_그_파일을_쓴다(self):
+        self.m.PROMPTS.mkdir(parents=True)
+        (self.m.PROMPTS / "system.md").write_text("우리 팀 리뷰어\n{{REPOS}}")
+        text = self.m.system_prompt(self.cfg, "app")
+        self.assertTrue(text.startswith("우리 팀 리뷰어"))
+        self.assertIn("로컬 클론:", text)
 
 
 def re_find_path(text: str) -> str:
