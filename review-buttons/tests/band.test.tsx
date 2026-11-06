@@ -29,7 +29,10 @@ const BAND = {
   props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 120, scroll: { offset: 0, bodyRows: 20 }, view: {} },
 } as const
 
-type World = { files: Record<string, string>; cwd: string; branch: string; runs: string[][] }
+type World = {
+  files: Record<string, string>; cwd: string; branch: string; runs: string[][]
+  env?: Record<string, string>
+}
 
 function world(on: On, w: World) {
   const clock = mock.clock(on)
@@ -38,7 +41,7 @@ function world(on: On, w: World) {
     const { Box } = $.ui.resolve(e)
     return <Box key="engine" />
   })
-  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? HOME : undefined }))
+  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? HOME : w.env?.[e.name] }))
   on('session.cwd', () => ({ value: w.cwd }))
   on('fs.exists', (_, e) => ({ value: e.path in w.files }))
   on('fs.read', (_, e) => ({ value: w.files[e.path] ?? '' }))
@@ -110,5 +113,20 @@ test('status.json 이 깨지면 직전 띠를 그대로 둔다', async ($, on) =
   await clock.advance(30_000)
   const ui = await mount($)
   expect((await ui.find({ key: 'app#7' }))?.text).toBe('app#7')
+  await ui.unmount()
+})
+
+test('PR_REVIEWER_HOME 을 따른다: status.json · 리뷰 worktree · 스크립트 경로', async ($, on) => {
+  const base = '/opt/prr'
+  const json = { ...STATUS_JSON, ui: { script: `${base}/bin/pr-reviewer.py`, worktrees: `${base}/wt` } }
+  const { w } = await setup($, on, {
+    files: { [`${base}/status.json`]: JSON.stringify(json) }, env: { PR_REVIEWER_HOME: `${base}/` },
+    cwd: `${base}/wt/app-8`, branch: '',
+  })
+  const ui = await mount($)
+  expect((await ui.find({ key: 'this-title' }))?.text).toBe('feat: x (#8)')
+  w.runs.length = 0
+  await ui.press({ key: 'app#8' })
+  expect(w.runs.at(-1)?.[1]).toBe(`${base}/bin/pr-reviewer.py`)
   await ui.unmount()
 })

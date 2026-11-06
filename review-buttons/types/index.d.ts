@@ -26,6 +26,9 @@ export type Status = {
   gitDirs: Record<string, string>
   pausedUntil: string | null
   python: string | null
+  /** 봇 스크립트와 리뷰 worktree 자리 (PR_REVIEWER_HOME 을 따른다). 옛 status.json 에는 없다 */
+  script: string | null
+  worktrees: string | null
 }
 
 declare module 'claude-code' {

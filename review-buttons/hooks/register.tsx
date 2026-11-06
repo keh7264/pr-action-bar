@@ -3,7 +3,10 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Pr, Status } from '../types'
 
-const EMPTY: Status = { updatedAt: null, items: [], prs: [], gitDirs: {}, pausedUntil: null, python: null }
+const EMPTY: Status = {
+  updatedAt: null, items: [], prs: [], gitDirs: {}, pausedUntil: null, python: null,
+  script: null, worktrees: null,
+}
 
 const status = atom({ plugin: 'review-buttons', key: 'status' } as const, EMPTY)
 const thisPr = atom({ plugin: 'review-buttons', key: 'thisPr' } as const, null)
@@ -41,8 +44,14 @@ async function home($: EngineInterface) {
   return (await $.env.get('HOME')) ?? ''
 }
 
+// 봇 스크립트와 같은 규칙: PR_REVIEWER_HOME 이 있으면 그 폴더, 없으면 ~/.pr-reviewer
+async function baseOf($: EngineInterface) {
+  const custom = ((await $.env.get('PR_REVIEWER_HOME')) ?? '').trim()
+  return custom ? custom.replace(/\/+$/, '') : `${await home($)}/.pr-reviewer`
+}
+
 async function loadStatus($: EngineInterface) {
-  const path = `${await home($)}/.pr-reviewer/status.json`
+  const path = `${await baseOf($)}/status.json`
   if (!(await $.fs.exists(path))) {
     // 제거한 뒤에는 옛 PR 목록과 버튼이 남지 않게 비운다
     await update($, status, prev => (same(prev, EMPTY) ? prev : EMPTY))
@@ -61,17 +70,20 @@ async function loadStatus($: EngineInterface) {
     gitDirs: raw.git_dirs ?? {},
     pausedUntil: raw.paused_until ?? null,
     python: raw.python ?? null,
+    script: raw.ui?.script ?? null,
+    worktrees: raw.ui?.worktrees ?? null,
   }
   // 값이 바뀌었을 때만 써서 30초마다 다시 그리지 않는다
   await update($, status, prev => (same(prev, next) ? prev : next))
 }
 
 async function findThisPr($: EngineInterface): Promise<Pr | null> {
-  const { prs, gitDirs } = await read($, status)
+  const { prs, gitDirs, worktrees } = await read($, status)
   const cwd = await $.session.cwd()
-  const reviewTree = /\/\.pr-reviewer\/wt\/([^/]+)-(\d+)(?:\/|$)/.exec(cwd)
-  if (reviewTree) {
-    return prs.find(p => p.repo === reviewTree[1] && p.number === Number(reviewTree[2])) ?? null
+  const wtRoot = `${worktrees ?? `${await baseOf($)}/wt`}/`
+  if (cwd.startsWith(wtRoot)) {
+    const m = /^(.+)-(\d+)$/.exec(cwd.slice(wtRoot.length).split('/')[0])
+    return m ? (prs.find(p => p.repo === m[1] && p.number === Number(m[2])) ?? null) : null
   }
   try {
     const [gitDir, branch] = await Promise.all([
@@ -94,10 +106,11 @@ async function tick($: EngineInterface) {
 }
 
 async function runScript($: EngineInterface, args: string[]) {
-  const script = `${await home($)}/.pr-reviewer/bin/pr-reviewer.py`
+  const current = await read($, status)
+  const script = current.script ?? `${await baseOf($)}/bin/pr-reviewer.py`
   try {
     // launchd 와 같은 python 을 쓴다 (install 이 status.json 에 적어 둔다)
-    const python = (await read($, status)).python ?? '/usr/bin/python3'
+    const python = current.python ?? '/usr/bin/python3'
     const { exitCode, stderr } = await $.process.run([python, script, ...args], { timeoutMs: CLICK_TIMEOUT_MS })
     if (exitCode !== 0) {
       const last = stderr.trim().split('\n').pop() || `종료 코드 ${exitCode}`

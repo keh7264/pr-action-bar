@@ -1037,7 +1037,10 @@ def build_status(cfg: dict, state: dict) -> dict:
             if action:
                 items.append(entry)
     status = {"updated_at": iso(), "me": me, "python": cfg.get("paths", {}).get("python3", sys.executable), "items": items, "prs": prs, "git_dirs": git_dirs,
-              "paused_until": state.get("paused_until") if cfg["auto_review"] and paused(state) else None, "errors": errors}
+              "paused_until": state.get("paused_until") if cfg["auto_review"] and paused(state) else None,
+              "errors": errors,
+              # mod 는 PR_REVIEWER_HOME 을 모를 수 있다. 스크립트와 리뷰 worktree 자리를 여기서 알려 준다
+              "ui": {"script": str(BIN / "pr-reviewer.py"), "worktrees": str(WORKTREES)}}
     return status
 
 
