@@ -31,7 +31,7 @@ const BAND = {
 
 type World = {
   files: Record<string, string>; cwd: string; branch: string; runs: string[][]
-  env?: Record<string, string>; hold?: Promise<void>
+  env?: Record<string, string>; gitDir?: string; hold?: Promise<void>
 }
 
 function world(on: On, w: World) {
@@ -50,7 +50,7 @@ function world(on: On, w: World) {
     w.runs.push([...e.argv])
     const a = e.argv.join(' ')
     if (a.includes('--refresh') && w.hold) await w.hold
-    const out = a.includes('--git-common-dir') ? '/w/app/.git\n' : a.includes('--show-current') ? `${w.branch}\n` : ''
+    const out = a.includes('--git-common-dir') ? `${w.gitDir ?? '/w/app/.git'}\n` : a.includes('--show-current') ? `${w.branch}\n` : ''
     return { value: { exitCode: 0, stdout: out, stderr: '' } }
   })
   return clock
@@ -150,4 +150,12 @@ test('↻ 를 빠르게 두 번 눌러도 새로고침은 한 번만 돈다', as
   await hold
   expect(w.runs.filter(r => r.includes('--refresh'))).toHaveLength(1)
   await ui.unmount()
+})
+
+test('리뷰 대상이 아닌 레포에서는 브랜치를 묻지 않고 git-common-dir 도 한 번만 묻는다', async ($, on) => {
+  const { w, clock } = await setup($, on, { gitDir: '/elsewhere/.git' })
+  await clock.advance(30_000)
+  await clock.advance(30_000)
+  expect(w.runs.filter(r => r.includes('--show-current'))).toHaveLength(0)
+  expect(w.runs.filter(r => r.includes('--git-common-dir'))).toHaveLength(1)
 })

@@ -17,6 +17,8 @@ const CLICK_TIMEOUT_MS = 60_000
 
 // atom 은 await 뒤에야 읽히니, 빠르게 두 번 눌러도 한 번만 돌게 동기 플래그로 막는다
 let refreshInFlight = false
+// 세션 cwd → git-common-dir (git 저장소가 아니면 null). 30초마다 git 을 다시 띄우지 않게
+const gitDirCache = new Map<string, string | null>()
 
 // 색은 괄호와 상태 이름에만 넣는다. 테마 키라서 라이트 테마에서는 다른 값으로 바뀐다
 const ACTION_COLORS: Record<string, string> = {
@@ -81,6 +83,14 @@ async function loadStatus($: EngineInterface) {
   await update($, status, prev => (same(prev, next) ? prev : next))
 }
 
+async function gitCommonDir($: EngineInterface, cwd: string): Promise<string | null> {
+  if (gitDirCache.has(cwd)) return gitDirCache.get(cwd)!
+  const r = await $.process.run(['git', '-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { timeoutMs: 5000 })
+  const dir = r.exitCode === 0 ? r.stdout.trim() : null
+  gitDirCache.set(cwd, dir)
+  return dir
+}
+
 async function findThisPr($: EngineInterface): Promise<Pr | null> {
   const { prs, gitDirs, worktrees } = await read($, status)
   const cwd = await $.session.cwd()
@@ -90,12 +100,11 @@ async function findThisPr($: EngineInterface): Promise<Pr | null> {
     return m ? (prs.find(p => p.repo === m[1] && p.number === Number(m[2])) ?? null) : null
   }
   try {
-    const [gitDir, branch] = await Promise.all([
-      $.process.run(['git', '-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { timeoutMs: 5000 }),
-      $.process.run(['git', '-C', cwd, 'branch', '--show-current'], { timeoutMs: 5000 }),
-    ])
-    if (gitDir.exitCode !== 0 || branch.exitCode !== 0) return null
-    const repo = Object.entries(gitDirs).find(([, dir]) => dir === gitDir.stdout.trim())?.[0]
+    const gitDir = await gitCommonDir($, cwd)
+    const repo = gitDir ? Object.entries(gitDirs).find(([, dir]) => dir === gitDir)?.[0] : undefined
+    if (!repo) return null // 리뷰 대상 레포가 아니면 브랜치는 볼 필요가 없다
+    const branch = await $.process.run(['git', '-C', cwd, 'branch', '--show-current'], { timeoutMs: 5000 })
+    if (branch.exitCode !== 0) return null
     // 포크에서 온 PR 은 브랜치 이름이 같아도 내 브랜치가 아니다
     return prs.find(p => p.repo === repo && !p.cross_repo && p.branch === branch.stdout.trim()) ?? null
   } catch {
