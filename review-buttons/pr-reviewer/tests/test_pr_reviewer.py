@@ -492,6 +492,15 @@ class ParallelReviews(Base):
         self.assertTrue(self.m.paused(self.state))
         self.assertEqual(self.state["repos"]["app"]["prs"]["1"]["transient_count"], 1)
 
+    def test_보류된_PR_은_바로_다시_넣지_않는다(self):
+        self.prs = self.prs[:1]
+        calls = []
+        self.m.review_pr = lambda cfg, state, repo, repo_dir, pr: calls.append(pr["number"])  # 보류처럼 그냥 끝난다
+        done = threading.Event()
+        threading.Thread(target=lambda: (self.m.poll_locked(self.cfg, self.state), done.set()), daemon=True).start()
+        self.assertTrue(done.wait(3), "보류된 PR 을 다시 넣으며 루프가 끝나지 않았다")
+        self.assertEqual(calls, [1])
+
     def test_같은_레포는_같은_잠금(self):
         self.assertIs(self.m.repo_lock("/a"), self.m.repo_lock("/a"))
         self.assertIsNot(self.m.repo_lock("/a"), self.m.repo_lock("/b"))

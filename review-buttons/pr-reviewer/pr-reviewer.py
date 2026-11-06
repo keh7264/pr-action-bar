@@ -1708,19 +1708,22 @@ def poll_locked(cfg: dict, state: dict) -> None:
         state.pop("paused_until", None)
         state.pop("pause_kind", None)
     running: dict[tuple[str, int], futures.Future] = {}
+    # 이 실행에서 리뷰 스레드가 끝난 시각. 보류 · 실패로 바로 끝난 PR 을 poll_minutes 안에 다시 넣지 않는다
+    finished_at: dict[tuple[str, int], float] = {}
     pool = futures.ThreadPoolExecutor(max_workers=cfg["max_parallel_reviews"], thread_name_prefix="review")
     try:
         last_pass = 0.0
         while True:
             finished = [k for k, f in running.items() if f.done()]
             for k in finished:
+                finished_at[k] = time.time()
                 err = running.pop(k).exception()
                 if err:  # review_worker 가 다 받아 내지만, 상태 저장 실패 같은 것은 로그로 남긴다
                     log(f"{k[0]}#{k[1]} 리뷰 스레드 오류: {short_error(err)}")
             waiting = [k for k in queued() if k not in running]
             room = len(running) < cfg["max_parallel_reviews"]
             if finished or time.time() - last_pass >= cfg["poll_minutes"] * 60 or (waiting and room):
-                poll_pass(cfg, state, me, pool, running)
+                poll_pass(cfg, state, me, pool, running, finished_at)
                 save_state(state)
                 write_status_safely(cfg, state)
                 last_pass = time.time()
@@ -1735,7 +1738,8 @@ def poll_locked(cfg: dict, state: dict) -> None:
 
 
 def poll_pass(cfg: dict, state: dict, me: str, pool: futures.Executor,
-              running: dict[tuple[str, int], futures.Future]) -> None:
+              running: dict[tuple[str, int], futures.Future],
+              finished_at: dict[tuple[str, int], float] | None = None) -> None:
     """레포마다 열린 PR 을 보고, 리뷰할 PR 은 빈자리만큼 리뷰 스레드에 넘기고, 나머지는 답글 · 피드백을 확인한다."""
     asked = queued()
     for repo, _ in asked:
@@ -1789,6 +1793,8 @@ def poll_pass(cfg: dict, state: dict, me: str, pool: futures.Executor,
                 ps.pop("reviewing_since", None)
                 continue
             if should_review(cfg, me, pr, ps):
+                if time.time() - (finished_at or {}).get(key, 0) < cfg["poll_minutes"] * 60:
+                    continue  # 방금 끝났는데 아직 리뷰 대상이면 보류 · 실패다. 다음 정규 바퀴에 다시 본다
                 if len(running) < cfg["max_parallel_reviews"]:
                     running[key] = pool.submit(review_worker, cfg, state, repo, repo_dir, pr)
                 continue  # 자리가 없으면 다음 바퀴에 리뷰한다
