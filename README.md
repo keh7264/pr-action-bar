@@ -54,6 +54,8 @@ python3 pr-reviewer/pr-reviewer.py setup
 
 `install`은 `gh`, `git`, `claude` 같은 도구의 절대 경로를 찾아 설정에 적어 둔다. launchd는 로그인 셸의 PATH를 모르기 때문에, nvm이나 fnm으로 깐 claude를 이렇게 안 해 주면 못 찾는다. 그다음 도구들이 실제로 돌아가는지, `gh`가 로그인돼 있는지, 레포마다 비밀번호 없이 `git ls-remote`가 되는지(VPN이 필요한 회사 레포 때문에) 확인한다. 스크립트는 `~/.pr-reviewer/bin/`에 복사해 두고 launchd는 그 복사본을 돌린다. 그래서 레포를 업데이트하면 `install`을 한 번 더 돌려야 한다.
 
+리뷰는 `max_parallel_reviews`개까지 동시에 돈다. 리뷰가 도는 동안에는 그 폴링 프로세스가 끝나지 않고 `poll_minutes`마다 새 PR과 다른 PR의 답글을 계속 확인한다(launchd는 도는 작업을 겹쳐 띄우지 않기 때문이다). 리뷰가 다 끝나면 프로세스도 끝나고, 다음 폴링은 다시 launchd가 띄운다.
+
 처음 보는 레포에 이미 열려 있던 PR은 리뷰하지 않는다. 설치하자마자 수십 개를 한꺼번에 리뷰하면 사용량이 금방 바닥난다.
 
 ### review-buttons
@@ -76,6 +78,7 @@ claude plugin install review-buttons@pr-action-bar
 | `effort` | `high` | `/code-review`에 넘길 레벨 |
 | `poll_minutes` | `5` | 폴링 간격(분). 바꾼 뒤에는 `install`을 다시 돌린다 |
 | `timeout_minutes` | `40` | 리뷰 한 단계에 쓸 수 있는 시간 |
+| `max_parallel_reviews` | `2` | 동시에 돌릴 리뷰 수. 같은 레포의 fetch · worktree 작업은 레포별 잠금으로 하나씩 한다 |
 | `max_attempts` | `2` | 같은 커밋에서 이만큼 실패하면 그 PR은 자동 리뷰를 멈추고 알려 준다 |
 | `skip_authors` | `[]` | 리뷰하지 않을 작성자. 내 PR은 원래 리뷰하지 않는다 |
 | `bot_logins` | `[]` | 사람 답글로 치지 않을 계정 (사내 리뷰 봇 등). `[bot]`으로 끝나는 계정과 `github-actions`, `dependabot`, `renovate`, `coderabbitai`는 원래 뺀다 |

@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -415,6 +416,79 @@ class BotFirstReview(ReviewBase):
         self.m.review_pr(self.cfg, self.state, "app", "/repo", self.pr)
         self.assertNotIn("먼저 남긴 리뷰가", self.prompts[1])
         self.assertIn("고칠 것과 안 고칠 것", self.prompts[1])
+
+
+class ParallelReviews(Base):
+    def setUp(self):
+        super().setUp()
+        self.cfg = self.config(repos={"app": str(self.home)}, max_parallel_reviews=2)
+        self.state = {"repos": {"app": {"seen_initial": "x"}}}
+        self.prs = [{"number": n, "title": f"pr {n}", "author": {"login": "alice"}, "isDraft": False,
+                     "headRefOid": "a" * 40, "url": "u"} for n in (1, 2, 3)]
+        self.active, self.peak, self.replies = 0, 0, []
+        self.lock = threading.Lock()
+        m = self.m
+        m.WAKE_SECONDS = 0.02
+        m.my_login = lambda cfg, state: "me"
+        m.list_open_prs = lambda *a: self.prs
+        m.cleanup_closed = lambda *a: None
+        m.write_status_safely = lambda *a, **k: None
+        m.check_replies = lambda cfg, state, me, repo, repo_dir, pr: self.replies.append(pr["number"])
+        self.hold = lambda pr: None
+        m.review_pr = self.fake_review
+
+    def fake_review(self, cfg, state, repo, repo_dir, pr):
+        with self.lock:
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+        try:
+            self.hold(pr)
+        finally:
+            with self.lock:
+                self.active -= 1
+        self.m.pr_state(state, repo, pr["number"])["reviewed_at"] = "done"
+
+    def test_빈자리만큼_동시에_리뷰한다(self):
+        barrier = threading.Barrier(2, timeout=3)
+        self.prs = self.prs[:2]
+        self.hold = lambda pr: barrier.wait()  # 둘이 동시에 돌지 않으면 시간 초과로 깨진다
+        self.m.poll_locked(self.cfg, self.state)
+        self.assertEqual(self.peak, 2)
+        self.assertFalse(barrier.broken)
+
+    def test_max_parallel_reviews_를_넘지_않고_남은_PR_도_리뷰한다(self):
+        self.cfg["max_parallel_reviews"] = 1
+        self.hold = lambda pr: threading.Event().wait(0.05)
+        self.m.poll_locked(self.cfg, self.state)
+        self.assertEqual(self.peak, 1)
+        done = [n for n in (1, 2, 3) if self.state["repos"]["app"]["prs"][str(n)].get("reviewed_at")]
+        self.assertEqual(done, [1, 2, 3])
+
+    def test_리뷰가_도는_동안에도_다른_PR_답글을_확인한다(self):
+        self.cfg["poll_minutes"] = 0.001  # 바퀴를 빨리 돌린다
+        self.state["repos"]["app"]["prs"] = {"2": {"session_id": "s", "reviewed_at": "x"}}
+        self.prs = self.prs[:2]
+        seen_twice = threading.Event()
+        self.m.check_replies = lambda cfg, state, me, repo, repo_dir, pr: (
+            self.replies.append(pr["number"]), len(self.replies) >= 2 and seen_twice.set())
+        self.hold = lambda pr: self.assertTrue(seen_twice.wait(3), "리뷰 중에 답글 확인이 다시 돌지 않았다")
+        self.m.poll_locked(self.cfg, self.state)
+        self.assertGreaterEqual(len(self.replies), 2)
+
+    def test_리뷰_스레드의_일시_실패는_쉬기로_이어진다(self):
+        self.prs = self.prs[:1]
+        self.m.notify = lambda *a, **k: None
+
+        def boom(pr):
+            raise self.m.Transient("network", "vpn")
+        self.hold = boom
+        self.m.poll_locked(self.cfg, self.state)
+        self.assertTrue(self.m.paused(self.state))
+        self.assertEqual(self.state["repos"]["app"]["prs"]["1"]["transient_count"], 1)
+
+    def test_같은_레포는_같은_잠금(self):
+        self.assertIs(self.m.repo_lock("/a"), self.m.repo_lock("/a"))
+        self.assertIsNot(self.m.repo_lock("/a"), self.m.repo_lock("/b"))
 
 
 def re_find_path(text: str) -> str:
