@@ -321,6 +321,14 @@ class ReviewFlow(ReviewBase):
         self.assertEqual((ps["reply_cursor"], ps["issue_cursor"], ps["format_ok"]), (5, 7, True))
         self.assertEqual(self.notes, ["app#1 리뷰 완료"])
 
+    def test_다시_리뷰하면_답글_커밋_기준이_새_리뷰로_바뀐다(self):
+        ps = self.m.pr_state(self.state, "app", 1)
+        ps.update(reviewed_sha="0" * 40, seen_sha="c" * 40, gave_up="x")
+        self.m.review_pr(self.cfg, self.state, "app", "/repo", self.pr)
+        self.assertEqual(ps["reviewed_sha"], "a" * 40)
+        self.assertNotIn("seen_sha", ps)
+        self.assertNotIn("gave_up", ps)
+
     def test_형식이_깨지면_알림에_적는다(self):
         self.final = "그냥 글"
         self.m.review_pr(self.cfg, self.state, "app", "/repo", self.pr)
@@ -414,6 +422,19 @@ class BotFirstReview(ReviewBase):
         self.assertIn("먼저 남긴 리뷰가", self.prompts[1])
         self.assertIn("여기 null", Path(re_find_path(self.prompts[1])).read_text())
         self.assertEqual(self.state["repos"]["app"]["prs"]["1"]["reply_cursor"], 5)
+
+    def test_다시_리뷰할_때는_이미_넘긴_피드백을_뺀다(self):
+        self.cfg = self.config(repos={"app": "/repo"}, bot_pr_markers=["[bot-fix]"])
+        self.pr["title"] = "[bot-fix] 로그 정리"
+        self.state["me"] = "me"
+        self.m.pr_state(self.state, "app", 1).update(reply_cursor=5, review_cursor=0, issue_cursor=0)
+        self.m.review_comments = lambda *a: [rc(5, "alice", "2026-01-01T00:00:00Z", "이미 고침", path="a.py", line=3),
+                                             rc(6, "bob", "2026-01-02T00:00:00Z", "새 지적", path="b.py", line=1)]
+        self.m.pr_reviews = self.m.issue_comments = lambda *a: []
+        self.m.review_pr(self.cfg, self.state, "app", "/repo", self.pr)
+        text = Path(re_find_path(self.prompts[1])).read_text()
+        self.assertIn("새 지적", text)
+        self.assertNotIn("이미 고침", text)
 
     def test_먼저_달린_리뷰가_없으면_그_문장은_없다(self):
         self.cfg = self.config(repos={"app": "/repo"}, bot_pr_markers=["[bot-fix]"])

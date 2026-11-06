@@ -820,7 +820,8 @@ def review_pr(cfg: dict, state: dict, repo: str, repo_dir: str, pr: dict) -> Non
         reviews = pr_reviews(cfg, repo_dir, pr["number"])
         issue = issue_comments(cfg, repo_dir, pr["number"])
         cursors = {"reply_cursor": max_id(threads), "issue_cursor": max_id(issue), "review_cursor": max_id(reviews)}
-        fb = collect_feedback(threads, reviews, issue, me_of(state), {})
+        # 다시 리뷰할 때는 이미 넘긴 피드백을 빼고, 처음이면 기준점이 없어 다 넣는다
+        fb = collect_feedback(threads, reviews, issue, me_of(state), {k: ps.get(k, 0) for k in cursors})
         if feedback_count(fb):
             fb_file = REVIEWS / repo / f"{pr['number']}-feedback-before-review.md"
             write_atomic(fb_file, feedback_markdown(fb, threads))
@@ -858,6 +859,8 @@ def review_pr(cfg: dict, state: dict, repo: str, repo_dir: str, pr: dict) -> Non
               seconds=seconds, format_ok=data is not None, title=pr["title"])
     ps.pop("reviewing_since", None)
     ps.pop("failures", None)
+    ps.pop("gave_up", None)
+    ps.pop("seen_sha", None)  # 새 리뷰가 기준이다. 다음 답글의 커밋 목록은 reviewed_sha 부터 센다
     state.get("notified", {}).clear()
     save_state(state)
     log(f"{repo}#{pr['number']} 리뷰 완료 ({seconds}초) → {out}")
