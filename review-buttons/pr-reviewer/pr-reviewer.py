@@ -387,7 +387,8 @@ def view_pr(cfg: dict, repo_dir: str, number: int) -> dict:
     return gh_json(cfg, ["pr", "view", str(number), "--json", PR_LIST_FIELDS], cwd=repo_dir)
 
 
-KNOWN_BOTS = {"github-actions", "dependabot", "renovate", "coderabbitai"}
+# Copilot 코드 리뷰는 [bot] 없이 "Copilot" 으로 줄 코멘트를 단다
+KNOWN_BOTS = {"github-actions", "dependabot", "renovate", "coderabbitai", "copilot"}
 _bot_logins: set[str] = set()  # 설정의 bot_logins (load_config 가 채운다)
 
 

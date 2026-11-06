@@ -82,6 +82,7 @@ class BotLogins(Base):
         pr = gql_pr(reviewThreads={"nodes": [thread("me", "our-review-bot")]})
         self.assertEqual(self.m.team_action(pr, "me", {}, False), "Re-review")
         self.assertTrue(self.m.is_bot("renovate[bot]"))
+        self.assertTrue(self.m.is_bot("Copilot"))
 
 
 class PollMinutes(Base):
