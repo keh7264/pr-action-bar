@@ -83,6 +83,15 @@ async function loadStatus($: EngineInterface) {
   await update($, status, prev => (same(prev, next) ? prev : next))
 }
 
+// 같은 브랜치에 PR 이 여럿이면(release 를 main · develop 에 각각 올린 경우 등) 할 일이 급한 것을 고른다
+const ACTION_RANK = Object.keys(ACTION_COLORS)
+const rankOf = (p: Pr) => {
+  const i = ACTION_RANK.indexOf(p.action)
+  return i < 0 ? ACTION_RANK.length : i
+}
+const pickUrgent = (candidates: Pr[]) =>
+  candidates.reduce<Pr | null>((best, p) => (best && rankOf(best) <= rankOf(p) ? best : p), null)
+
 async function gitCommonDir($: EngineInterface, cwd: string): Promise<string | null> {
   if (gitDirCache.has(cwd)) return gitDirCache.get(cwd)!
   const r = await $.process.run(['git', '-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { timeoutMs: 5000 })
@@ -106,7 +115,7 @@ async function findThisPr($: EngineInterface): Promise<Pr | null> {
     const branch = await $.process.run(['git', '-C', cwd, 'branch', '--show-current'], { timeoutMs: 5000 })
     if (branch.exitCode !== 0) return null
     // 포크에서 온 PR 은 브랜치 이름이 같아도 내 브랜치가 아니다
-    return prs.find(p => p.repo === repo && !p.cross_repo && p.branch === branch.stdout.trim()) ?? null
+    return pickUrgent(prs.filter(p => p.repo === repo && !p.cross_repo && p.branch === branch.stdout.trim()))
   } catch {
     return null
   }

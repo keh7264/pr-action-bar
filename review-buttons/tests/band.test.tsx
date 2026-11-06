@@ -159,3 +159,13 @@ test('리뷰 대상이 아닌 레포에서는 브랜치를 묻지 않고 git-com
   expect(w.runs.filter(r => r.includes('--show-current'))).toHaveLength(0)
   expect(w.runs.filter(r => r.includes('--git-common-dir'))).toHaveLength(1)
 })
+
+test('같은 브랜치에 PR 이 여럿이면 할 일이 급한 것을 This PR 로 고른다', async ($, on) => {
+  const other = { ...mine, number: 9, title: 'release to main', action: 'Awaiting approval' }
+  const urgent = { ...mine, number: 10, title: 'release to develop', action: 'Fix CI' }
+  const json = { ...STATUS_JSON, prs: [other, urgent, team], items: [other, urgent, team] }
+  await setup($, on, { files: { [STATUS]: JSON.stringify(json) } })
+  const ui = await mount($)
+  expect((await ui.find({ key: 'this-action' }))?.text).toBe('[ Fix CI ]')
+  await ui.unmount()
+})
