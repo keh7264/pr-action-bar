@@ -130,3 +130,11 @@ test('PR_REVIEWER_HOME 을 따른다: status.json · 리뷰 worktree · 스크�
   expect(w.runs.at(-1)?.[1]).toBe(`${base}/bin/pr-reviewer.py`)
   await ui.unmount()
 })
+
+test('조회에 실패한 레포는 경고를 띄운다', async ($, on) => {
+  await setup($, on, { files: { [STATUS]: JSON.stringify({ ...STATUS_JSON, failed_repos: ['app'] }) } })
+  const ui = await mount($)
+  expect(await ui.find({ type: 'Text', text: /조회 실패: app/ })).toBeDefined()
+  expect((await ui.find({ key: 'app#7' }))?.text).toBe('app#7')
+  await ui.unmount()
+})

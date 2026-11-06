@@ -996,7 +996,8 @@ def build_status(cfg: dict, state: dict) -> dict:
     _cache.clear()
     me = my_login(cfg, state)
     items, prs, git_dirs = [], [], {}
-    errors = []
+    errors, failed = [], []
+    prev = read_json(STATUS, {})
     for repo, repo_dir in cfg["repos"].items():
         try:
             owner, name = repo_slug_cached(cfg, repo_dir).split("/")
@@ -1006,6 +1007,12 @@ def build_status(cfg: dict, state: dict) -> dict:
                                  "-f", f"name={name}"], cwd=repo_dir)
         except (Failed, Transient, subprocess.TimeoutExpired) as e:
             errors.append(f"{repo}: {short_error(e)}")
+            failed.append(repo)
+            # 조회에 실패한 레포는 직전 값을 그대로 둔다. 빼 버리면 VPN 이 끊겼을 때 "할 일 없음"처럼 보인다
+            prs += [p for p in prev.get("prs", []) if p.get("repo") == repo]
+            items += [p for p in prev.get("items", []) if p.get("repo") == repo]
+            if repo in prev.get("git_dirs", {}):
+                git_dirs[repo] = prev["git_dirs"][repo]
             continue
         for pr in data["data"]["repository"]["pullRequests"]["nodes"]:
             author = author_of(pr)
@@ -1038,7 +1045,7 @@ def build_status(cfg: dict, state: dict) -> dict:
                 items.append(entry)
     status = {"updated_at": iso(), "me": me, "python": cfg.get("paths", {}).get("python3", sys.executable), "items": items, "prs": prs, "git_dirs": git_dirs,
               "paused_until": state.get("paused_until") if cfg["auto_review"] and paused(state) else None,
-              "errors": errors,
+              "errors": errors, "failed_repos": failed,
               # mod 는 PR_REVIEWER_HOME 을 모를 수 있다. 스크립트와 리뷰 worktree 자리를 여기서 알려 준다
               "ui": {"script": str(BIN / "pr-reviewer.py"), "worktrees": str(WORKTREES)}}
     return status

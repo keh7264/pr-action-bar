@@ -5,7 +5,7 @@ import type { Pr, Status } from '../types'
 
 const EMPTY: Status = {
   updatedAt: null, items: [], prs: [], gitDirs: {}, pausedUntil: null, python: null,
-  script: null, worktrees: null,
+  failedRepos: [], script: null, worktrees: null,
 }
 
 const status = atom({ plugin: 'review-buttons', key: 'status' } as const, EMPTY)
@@ -70,6 +70,7 @@ async function loadStatus($: EngineInterface) {
     gitDirs: raw.git_dirs ?? {},
     pausedUntil: raw.paused_until ?? null,
     python: raw.python ?? null,
+    failedRepos: raw.failed_repos ?? [],
     script: raw.ui?.script ?? null,
     worktrees: raw.ui?.worktrees ?? null,
   }
@@ -171,7 +172,7 @@ export const register: Register = on => {
     if (e.props.hasSurvey) return next(e)
 
     const { Box, Button, Text } = $.ui.resolve(e)
-    const { items, updatedAt, pausedUntil } = await read($, status)
+    const { items, updatedAt, pausedUntil, failedRepos } = await read($, status)
     const current = await read($, thisPr)
     const busy = await read($, refreshing)
     // 같은 자리를 쓰는 다른 mod 가 그린 것도 끝에 붙인다
@@ -195,6 +196,7 @@ export const register: Register = on => {
             />
           </Box>
           {pausedUntil ? <Text color="warning">{`리뷰 쉬는 중 (${hhmm(pausedUntil)}까지)`}</Text> : null}
+          {failedRepos.length > 0 ? <Text color="warning">{`조회 실패: ${failedRepos.join(', ')}`}</Text> : null}
           {clickable ? null : <Text dimColor>클릭하려면 CLAUDE_CODE_NO_FLICKER=1 로 실행</Text>}
         </Box>
         {GROUPS.map(g => {
