@@ -141,8 +141,8 @@ def rc(id_: int, login: str, at: str, body: str = "...", **over) -> dict:
     return {"id": id_, "user": {"login": login}, "created_at": at, "body": body, **over}
 
 
-class ConversationReplies(Base):
-    """check_replies: 대화 탭 댓글도 답글 리뷰로 넘긴다."""
+class ReplyBase(Base):
+    """답글 · 피드백 확인 준비: GitHub · git · claude 를 바꿔 끼운다."""
 
     def setUp(self):
         super().setUp()
@@ -164,6 +164,10 @@ class ConversationReplies(Base):
         m.git = lambda cfg, *args, cwd, **k: (self.git_calls.append(args)
                                               or subprocess.CompletedProcess(args, 0, self.git_out, ""))
         self.pr = {"number": 1, "url": "u", "headRefOid": "a" * 40, "baseRefName": "main"}
+
+
+class ConversationReplies(ReplyBase):
+    """check_replies: 대화 탭 댓글도 답글 리뷰로 넘긴다."""
 
     def run_check(self):
         self.m.check_replies(self.cfg, self.state, "me", "app", "/repo", self.pr)
@@ -274,9 +278,7 @@ class ReviewFormat(Base):
         self.assertEqual(self.m.tally_of(bad), "분류 확인 필요 1")
 
 
-class ReviewFlow(Base):
-    """review_pr 한 바퀴: 리뷰 → 재검토 → 정리, 리뷰 파일 · JSON · 알림."""
-
+class ReviewBase(Base):
     def setUp(self):
         super().setUp()
         self.cfg = self.config(repos={"app": "/repo"})
@@ -296,6 +298,10 @@ class ReviewFlow(Base):
             self.prompts.append(text)
             return {"session_id": "sid", "result": self.final if len(self.prompts) == 3 else "..."}
         m.claude = fake_claude
+
+
+class ReviewFlow(ReviewBase):
+    """review_pr 한 바퀴: 리뷰 → 재검토 → 정리, 리뷰 파일 · JSON · 알림."""
 
     def test_리뷰_파일과_JSON_을_쓰고_알린다(self):
         self.m.review_pr(self.cfg, self.state, "app", "/repo", self.pr)
@@ -352,6 +358,63 @@ class SystemPrompt(Base):
         text = self.m.system_prompt(self.cfg, "app")
         self.assertTrue(text.startswith("우리 팀 리뷰어"))
         self.assertIn("로컬 클론:", text)
+
+
+class BotFeedback(ReplyBase):
+    """봇 PR: 다른 사람이 남긴 줄 코멘트 · 리뷰 본문 · 대화 탭 글을 고칠 목록으로."""
+
+    def setUp(self):
+        super().setUp()
+        self.cfg = self.config(repos={"app": str(self.home)}, bot_pr_markers=["[bot-fix]"])
+        self.ps.update(review_cursor=0)
+
+    def run_feedback(self):
+        self.m.check_feedback(self.cfg, self.state, "me", "app", "/repo", self.pr)
+
+    def test_다른_사람의_피드백을_모아_고칠_목록을_만든다(self):
+        self.threads = [rc(5, "alice", "2026-01-01T00:00:00Z", "여기 null", path="a.py", line=3)]
+        self.reviews = [{"id": 8, "user": {"login": "bob"}, "state": "CHANGES_REQUESTED", "body": "테스트 추가",
+                         "submitted_at": "2026-01-01T00:00:00Z"},
+                        {"id": 9, "user": {"login": "carol"}, "state": "APPROVED", "body": "",
+                         "submitted_at": "2026-01-01T00:00:00Z"}]
+        self.issue = [rc(11, "dave", "2026-01-02T00:00:00Z", "문서도?"), rc(12, "me", "2026-01-02T00:00:00Z")]
+        self.run_feedback()
+        self.assertEqual(len(self.calls), 1)
+        self.assertIn("고칠 것과 안 고칠 것", self.calls[0])
+        text = Path(re_find_path(self.calls[0])).read_text()
+        for word in ("## 리뷰 본문", "테스트 추가", "## 줄 코멘트", "a.py:3", "여기 null", "## 대화 탭", "문서도?"):
+            self.assertIn(word, text)
+        self.assertNotIn("carol", text)  # 본문 없는 승인은 피드백이 아니다
+        self.assertEqual((self.ps["reply_cursor"], self.ps["review_cursor"], self.ps["issue_cursor"]), (5, 9, 12))
+
+    def test_내_글과_봇_글만_있으면_넘기지_않는다(self):
+        self.threads = [rc(5, "me", "2026-01-01T00:00:00Z"), rc(6, "lint[bot]", "2026-01-01T00:00:00Z")]
+        self.run_feedback()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.ps["reply_cursor"], 6)
+
+
+class BotFirstReview(ReviewBase):
+    def test_첫_리뷰에_먼저_달린_리뷰를_넣는다(self):
+        self.cfg = self.config(repos={"app": "/repo"}, bot_pr_markers=["[bot-fix]"])
+        self.pr["title"] = "[bot-fix] 로그 정리"
+        self.state["me"] = "me"
+        m = self.m
+        m.review_comments = lambda *a: [rc(5, "alice", "2026-01-01T00:00:00Z", "여기 null", path="a.py", line=3)]
+        m.pr_reviews = lambda *a: []
+        m.issue_comments = lambda *a: []
+        self.m.review_pr(self.cfg, self.state, "app", "/repo", self.pr)
+        self.assertIn("먼저 남긴 리뷰가", self.prompts[1])
+        self.assertIn("여기 null", Path(re_find_path(self.prompts[1])).read_text())
+        self.assertEqual(self.state["repos"]["app"]["prs"]["1"]["reply_cursor"], 5)
+
+    def test_먼저_달린_리뷰가_없으면_그_문장은_없다(self):
+        self.cfg = self.config(repos={"app": "/repo"}, bot_pr_markers=["[bot-fix]"])
+        self.pr["title"] = "[bot-fix] 로그 정리"
+        self.m.review_comments = self.m.pr_reviews = self.m.issue_comments = lambda *a: []
+        self.m.review_pr(self.cfg, self.state, "app", "/repo", self.pr)
+        self.assertNotIn("먼저 남긴 리뷰가", self.prompts[1])
+        self.assertIn("고칠 것과 안 고칠 것", self.prompts[1])
 
 
 def re_find_path(text: str) -> str:

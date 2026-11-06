@@ -79,7 +79,7 @@ claude plugin install review-buttons@pr-action-bar
 | `max_attempts` | `2` | 같은 커밋에서 이만큼 실패하면 그 PR은 자동 리뷰를 멈추고 알려 준다 |
 | `skip_authors` | `[]` | 리뷰하지 않을 작성자. 내 PR은 원래 리뷰하지 않는다 |
 | `bot_logins` | `[]` | 사람 답글로 치지 않을 계정 (사내 리뷰 봇 등). `[bot]`으로 끝나는 계정과 `github-actions`, `dependabot`, `renovate`, `coderabbitai`는 원래 뺀다 |
-| `bot_pr_markers` | `[]` | 내가 돌리는 봇이 연 PR의 제목 표시. 내 PR로 치고, 리뷰도 "내가 고칠 목록" 모양으로 정리한다 |
+| `bot_pr_markers` | `[]` | 내가 돌리는 봇이 연 PR의 제목 표시. 내 PR로 치고, 리뷰도 "내가 고칠 목록" 모양으로 정리한다. 다른 사람이 남긴 피드백도 고칠 목록으로 만든다 (아래 "봇 PR") |
 | `release_pr_authors`, `release_pr_title_pattern` | | CI가 여는 릴리스 머지 PR. 리뷰하지 않고 왜 막혔는지만 보여 준다 |
 | `pause_minutes` | `30` | 사용 한도, 네트워크, 로그인 문제로 실패했을 때 리뷰를 쉬는 시간 |
 | `notify_every_hours` | `3` | 같은 "쉬는 중" 알림을 다시 보내는 간격 |
@@ -132,6 +132,13 @@ orca repo set --repo path:$HOME/work/app --external-worktree-visibility show
 리뷰 탭을 처음 열 때 Claude Code가 이 폴더를 믿을지 한 번 물어본다.
 
 내 리뷰 스레드나 대화 탭 글에 답글이 달리면(봇 댓글, 내가 승인한 뒤의 댓글은 빼고), 열려 있는 리뷰 탭의 입력창이 비어 있을 때만 그 탭에 프롬프트를 넣는다. 뭔가 쓰고 있던 중이면 다음 폴링까지 기다린다. 탭이 없으면 원래 세션을 갈라서(`--fork-session`) 뒤에서 돌린다. 답글을 볼 때는 리뷰 worktree를 PR의 최신 커밋으로 옮기고, 지난 리뷰 뒤에 올라온 커밋 목록(base 머지 제외)을 프롬프트에 같이 넣는다.
+
+## 봇 PR
+
+`bot_pr_markers`에 걸린 PR은 내가 고칠 PR이라 흐름이 다르다.
+
+- 첫 리뷰 때, 리뷰를 기다리는 동안 다른 사람이 먼저 남긴 리뷰(줄 코멘트, 리뷰 본문, 대화 탭 글)를 같이 넘겨 고칠 목록에 넣는다.
+- 리뷰 뒤에는 내 스레드 답글이 아니라 다른 사람이 새로 남긴 피드백 전부를 본다. 줄 코멘트, 리뷰 본문(본문 없는 승인은 빼고 변경 요청은 넣는다), 대화 탭 글이 오면 리뷰 세션에 넘겨 고칠 것(diff)과 안 고칠 것(이유와 답글 문구)으로 나눈다. 프롬프트 이름은 `feedback`이고 `{{FEEDBACK_FILE}}`, `{{COMMITS}}`를 쓴다.
 
 ## 실패했을 때
 
