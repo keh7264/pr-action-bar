@@ -761,6 +761,19 @@ class Ops(Base):
         self.assertEqual(self.out(self.m.update)[0], 1)
         self.assertEqual(self.m.CONFIG.read_text(), broken)
 
+    def test_리뷰가_도는_중이면_install_은_스크립트도_바꾸지_않는다(self):
+        self.config(repos={})
+        self.m.doctor = lambda cfg=None: []
+        target = self.m.BIN / "pr-reviewer.py"
+        target.parent.mkdir(parents=True)
+        target.write_text("old")
+        with self.m.try_lock(self.m.LOCK) as got:
+            self.assertTrue(got)
+            code, text = self.out(self.m.install)
+        self.assertEqual(code, 1)
+        self.assertIn("미룬다", text)
+        self.assertEqual(target.read_text(), "old")
+
     def test_prompts_는_기본값을_꺼내고_내_파일은_건드리지_않는다(self):
         self.m.PROMPTS.mkdir(parents=True)
         (self.m.PROMPTS / "reply.md").write_text("내 답글 프롬프트")

@@ -2256,14 +2256,15 @@ def install() -> int:
         for p in problems:
             print(f"  - {p}")
         return 1
-    # launchd 가 실행하는 스크립트는 고정 위치의 복사본으로 둔다
     target = BIN / "pr-reviewer.py"
-    write_atomic(target, Path(__file__).read_text())
-    target.chmod(0o755)
     with try_lock(LOCK) as got:
         if not got:
-            print("리뷰가 도는 중이라 launchd 등록을 미룬다. 잠시 뒤 다시 실행하라")
+            # 스크립트만 바뀌고 plist 는 옛것으로 남지 않게 아무것도 바꾸지 않고 멈춘다
+            print("리뷰가 도는 중이라 설치를 미룬다. 잠시 뒤 다시 실행하라")
             return 1
+        # launchd 가 실행하는 스크립트는 고정 위치의 복사본으로 둔다
+        write_atomic(target, Path(__file__).read_text())
+        target.chmod(0o755)
         PLIST.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(["/bin/launchctl", "unload", str(PLIST)], capture_output=True)
         write_atomic(PLIST, plist_text(cfg, paths.get("python3", sys.executable)))
