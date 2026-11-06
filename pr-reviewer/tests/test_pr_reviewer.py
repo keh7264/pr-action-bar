@@ -40,6 +40,7 @@ class Base(unittest.TestCase):
         os.environ.pop("PR_REVIEWER_HOME", None)
 
     def config(self, **values) -> dict:
+        values.setdefault("terminal", "none")  # 이 맥에 깔린 Orca · Ghostty 를 따라가지 않게
         self.m.write_json(self.m.CONFIG, values)
         return self.m.load_config()
 
@@ -538,6 +539,65 @@ class ReviewNow(ParallelReviews):
         self.assertEqual(self.m.review_now("app", 7), 0)
         self.assertEqual(ran, [[("app", 7)]])
         self.assertEqual(self.m.review_now("nope", 7), 1)
+
+
+class Terminals(Base):
+    def setUp(self):
+        super().setUp()
+        self.m.ORCA_APP = str(self.home / "no-orca")
+        self.m.GHOSTTY_APPS = [self.home / "Ghostty.app"]
+        self.m.find_tool = lambda paths, name: None  # PATH 에 있는 orca 를 찾지 않게
+        self.calls = []
+
+    def fake_osascript(self, *answers: str):
+        it = iter(answers)
+
+        def tcall(cfg, argv):
+            self.calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, next(it) + "\n", "")
+        self.m.tcall = tcall
+
+    def test_auto_는_Orca_다음_Ghostty_다음_none(self):
+        self.assertEqual(self.config(repos={}, terminal="auto")["terminal"], "none")
+        (self.home / "Ghostty.app").mkdir()
+        self.assertEqual(self.config(repos={}, terminal="auto")["terminal"], "ghostty")
+        Path(self.m.ORCA_APP).write_text("")
+        self.assertEqual(self.config(repos={}, terminal="auto")["terminal"], "orca")
+        self.assertEqual(self.config(repos={}, terminal="ghostty")["terminal"], "ghostty")
+        self.assertEqual(self.config(repos={}, terminal="auto")["terminal_setting"], "auto")
+
+    def test_Ghostty_에_그_폴더_탭이_있으면_그리로_간다(self):
+        cfg = self.config(repos={}, terminal="ghostty")
+        self.fake_osascript("focused")
+        self.assertTrue(self.m.open_in_terminal(cfg, Path("/wt/app-1"), "claude --resume s", "app#1"))
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0][-2:], ["--", "/wt/app-1"])
+
+    def test_Ghostty_에_탭이_없으면_새_탭에서_명령을_실행한다(self):
+        cfg = self.config(repos={}, terminal="ghostty")
+        self.fake_osascript("none", "opened")
+        self.assertTrue(self.m.open_in_terminal(cfg, Path("/wt/app-1"), "claude --resume s", "app#1"))
+        self.assertEqual(self.calls[1][0], "/usr/bin/osascript")
+        self.assertEqual(self.calls[1][-4:], ["--", "/wt/app-1", "claude --resume s", "app#1"])
+        self.assertIn("new tab in front window", self.calls[1][2])
+
+    def test_Ghostty_가_막히면_False(self):
+        cfg = self.config(repos={}, terminal="ghostty")
+        self.m.tcall = lambda cfg, argv: subprocess.CompletedProcess(argv, 1, "", "not allowed")
+        self.assertFalse(self.m.open_in_terminal(cfg, Path("/wt"), "c", "t"))
+
+    def test_Ghostty_탭에는_답글을_넣지_않는다(self):
+        cfg = self.config(repos={}, terminal="ghostty")
+        self.assertIs(self.m.terminal_send(cfg, Path("/wt"), "x"), False)
+
+    def test_Ghostty_는_git_worktree_에서_작업_폴더를_찾는다(self):
+        cfg = self.config(repos={}, terminal="ghostty")
+        listing = (f"worktree /w/app\nHEAD 1\nbranch refs/heads/main\n\n"
+                   f"worktree {self.m.WORKTREES}/app-3\nHEAD 2\nbranch refs/heads/feature/x\n\n"
+                   f"worktree /w/app-x\nHEAD 2\nbranch refs/heads/feature/x\n")
+        self.m.git = lambda cfg, *a, cwd, **k: subprocess.CompletedProcess(a, 0, listing, "")
+        self.assertEqual(self.m.work_tree_for_branch(cfg, "/w/app", "feature/x"), "/w/app-x")
+        self.assertIsNone(self.m.work_tree_for_branch(cfg, "/w/app", "nope"))
 
 
 def re_find_path(text: str) -> str:

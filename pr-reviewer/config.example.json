@@ -16,7 +16,7 @@
   "release_pr_title_pattern": "^(Merge|Release|chore\\(release\\))",
   "pause_minutes": 30,
   "notify_every_hours": 3,
-  "terminal": "none",
+  "terminal": "auto",
   "terminal_timeout_seconds": 5,
   "language": "ko",
   "review_instructions": "",

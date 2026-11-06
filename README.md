@@ -24,7 +24,7 @@ PR 상태를 Slack 알림 대신 Claude Code 입력창 바로 위에 띄우고, 
 - macOS (launchd, `caffeinate`, `open`을 쓴다)
 - Python 3.9 이상 (macOS 기본 `python3` 도 된다), git, 로그인된 [GitHub CLI](https://cli.github.com/) (`gh auth login`)
 - [Claude Code](https://claude.com/claude-code). mod를 지원하는 버전이어야 하고, 자동 리뷰를 쓰면 `/code-review` 스킬도 있어야 한다
-- 있으면 좋은 것: `terminal-notifier` (알림을 누르면 PR이 열린다. `setup`이 brew로 깔아 준다), Orca (리뷰 세션을 탭으로 연다)
+- 있으면 좋은 것: `terminal-notifier` (알림을 누르면 PR이 열린다. `setup`이 brew로 깔아 준다), Orca나 Ghostty 1.3 이상 (리뷰 세션을 탭으로 연다)
 
 ## Mod만 쓸 수도 있다
 
@@ -46,7 +46,7 @@ python3 pr-reviewer/pr-reviewer.py setup
 
 1. 리뷰할 레포. Orca에 등록된 레포가 있으면 번호로 고르고, 없으면 경로를 적는다. 띠에 붙을 짧은 이름도 정한다.
 2. 자동 리뷰를 쓸지. 끄면 mod만 쓴다. 켜면 `/code-review high`(설정의 `effort`, 기본 high)로 리뷰하고, 지적마다 실제로 터지는지 한 번 더 검증한 뒤에 알린다.
-3. PR을 누르면 Orca 탭으로 갈지. 그러면 레포를 Orca에 등록하고 바깥 worktree도 보이게 켜 둔다.
+3. PR을 누르면 어느 터미널 탭으로 갈지(`auto`, `orca`, `ghostty`, `none`). Orca면 레포를 Orca에 등록하고 바깥 worktree도 보이게 켜 둔다.
 4. `terminal-notifier`가 없으면 brew로 설치할지. 있어야 알림을 눌러 PR을 연다. 없으면 맥 기본 알림만 뜬다.
 5. 이슈 링크 템플릿과 이슈 프로젝트 키.
 
@@ -86,7 +86,7 @@ claude plugin install review-buttons@pr-action-bar
 | `release_pr_authors`, `release_pr_title_pattern` | | CI가 여는 릴리스 머지 PR. 리뷰하지 않고 왜 막혔는지만 보여 준다 |
 | `pause_minutes` | `30` | 사용 한도, 네트워크, 로그인 문제로 실패했을 때 리뷰를 쉬는 시간 |
 | `notify_every_hours` | `3` | 같은 "쉬는 중" 알림을 다시 보내는 간격 |
-| `terminal` | `none` | `none` 또는 `orca` |
+| `terminal` | `auto` | `auto`, `orca`, `ghostty`, `none`. `auto`는 Orca가 있으면 `orca`, 없고 Ghostty가 있으면 `ghostty`, 둘 다 없으면 `none`(PR 페이지) |
 | `language` | `ko` | 리뷰를 정리할 언어 |
 | `review_instructions` | `""` | 팀 리뷰 기준. 리뷰 세션 시스템 프롬프트에 붙어 모든 단계에 들어간다 |
 | `extra_dirs` | `[]` | 리뷰 세션이 읽을 수 있게 열어 줄 폴더(`--add-dir`). `repos`의 로컬 클론은 원래 열고, 레포 위치도 시스템 프롬프트에 적어 준다 |
@@ -142,6 +142,12 @@ orca repo set --repo path:$HOME/work/app --external-worktree-visibility show
 
 - 첫 리뷰 때, 리뷰를 기다리는 동안 다른 사람이 먼저 남긴 리뷰(줄 코멘트, 리뷰 본문, 대화 탭 글)를 같이 넘겨 고칠 목록에 넣는다.
 - 리뷰 뒤에는 내 스레드 답글이 아니라 다른 사람이 새로 남긴 피드백 전부를 본다. 줄 코멘트, 리뷰 본문(본문 없는 승인은 빼고 변경 요청은 넣는다), 대화 탭 글이 오면 리뷰 세션에 넘겨 고칠 것(diff)과 안 고칠 것(이유와 답글 문구)으로 나눈다. 프롬프트 이름은 `feedback`이고 `{{FEEDBACK_FILE}}`, `{{COMMITS}}`를 쓴다.
+
+## Ghostty를 쓴다면
+
+`"terminal": "ghostty"`(또는 Orca 없이 `auto`)로 두면 PR을 눌렀을 때 그 worktree에서 열린 Ghostty 탭으로 간다. 없으면 새 탭을 열고 `claude --resume`(리뷰 세션)이나 `claude --continue`(내 PR 작업 폴더)를 실행한다. 내 PR의 작업 폴더는 `git worktree list`에서 그 브랜치를 체크아웃한 곳을 찾는다.
+
+Ghostty 1.3부터 들어간 AppleScript를 쓴다. 처음 누를 때 macOS가 "Ghostty 제어를 허용할지" 묻는다(시스템 설정 → 개인정보 보호 및 보안 → 자동화). Orca와 달리 리뷰가 끝날 때 탭을 미리 열지 않고, 입력창이 비었는지 알 수 없어서 답글 리뷰도 탭에 넣지 않고 뒤에서 세션을 갈라 돌린다.
 
 ## 실패했을 때
 

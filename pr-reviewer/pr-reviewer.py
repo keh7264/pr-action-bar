@@ -72,7 +72,8 @@ DEFAULT_CONFIG = {
     "release_pr_title_pattern": r"^(Merge|Release|chore\(release\))",
     "pause_minutes": 30,
     "notify_every_hours": 3,
-    "terminal": "none",  # none | orca
+    # auto | orca | ghostty | none. auto 는 Orca 가 있으면 orca, 없고 Ghostty 가 있으면 ghostty, 둘 다 없으면 none
+    "terminal": "auto",
     "terminal_timeout_seconds": 5,
     "language": "ko",
     # 리뷰 세션 시스템 프롬프트에 덧붙일 팀 리뷰 기준 (모든 단계에 들어간다)
@@ -254,6 +255,8 @@ def load_config() -> dict:
             cfg[key] = max(1, int(cfg[key]))
         except (TypeError, ValueError):
             cfg[key] = DEFAULT_CONFIG[key]
+    cfg["terminal_setting"] = cfg["terminal"]
+    cfg["terminal"] = resolve_terminal(cfg)
     _bot_logins.clear()
     _bot_logins.update(normalize_login(n) for n in cfg["bot_logins"] or [])
     return cfg
@@ -1109,7 +1112,29 @@ def conversation_log(issue: list[dict], reviews: list[dict], me: str, new: list[
 
 # ───────────────────────── 터미널 연동 ─────────────────────────
 # orca: CLI 로 탭을 포커스 없이 미리 열고, 누르면 그 탭으로 간다.
+# ghostty: AppleScript 로 그 폴더의 탭을 찾아 가고, 없으면 새 탭을 연다 (미리 열지는 않는다).
 # none: 미리 열지 않고, 누르면 PR 페이지를 연다.
+
+ORCA_APP = "/Applications/Orca.app/Contents/Resources/bin/orca"
+GHOSTTY_APPS = [Path("/Applications/Ghostty.app"), HOME / "Applications/Ghostty.app"]
+TERMINALS = ("auto", "orca", "ghostty", "none")
+
+
+def ghostty_app() -> Path | None:
+    return next((p for p in GHOSTTY_APPS if p.exists()), None)
+
+
+def resolve_terminal(cfg: dict) -> str:
+    choice = str(cfg.get("terminal") or "auto").strip().lower()
+    if choice in ("orca", "ghostty", "none"):
+        return choice
+    if choice != "auto":
+        log(f"terminal 값 {choice!r} 을 몰라 auto 로 본다")
+    if find_tool(cfg.get("paths", {}), "orca") or Path(ORCA_APP).exists():
+        return "orca"
+    if ghostty_app():
+        return "ghostty"
+    return "none"
 
 
 def tcall(cfg: dict, argv: list[str]) -> subprocess.CompletedProcess | None:
@@ -1121,7 +1146,7 @@ def tcall(cfg: dict, argv: list[str]) -> subprocess.CompletedProcess | None:
 
 
 def orca(cfg: dict, *args: str) -> dict | None:
-    exe = find_tool(cfg.get("paths", {}), "orca")
+    exe = find_tool(cfg.get("paths", {}), "orca") or (ORCA_APP if Path(ORCA_APP).exists() else None)
     if not exe:
         return None
     p = tcall(cfg, [exe, *args, "--json"])
@@ -1153,6 +1178,62 @@ def orca_nest(cfg: dict, wt: Path, repo_dir: str, base: str | None, number: int)
          "--display-name", f"#{number} 리뷰", "--pr", str(number))
 
 
+GHOSTTY_TIMEOUT = 20  # 처음에는 macOS 가 "Ghostty 제어 허용"을 물어 오래 걸릴 수 있다
+
+# 폴더(또는 그 아래 폴더)에서 열린 터미널을 찾아 앞으로 가져온다. 값은 argv 로 넘겨 따옴표 문제를 피한다
+GHOSTTY_FOCUS = """on run argv
+  set target to item 1 of argv
+  tell application "Ghostty"
+    set hits to every terminal whose working directory is target or working directory starts with (target & "/")
+    if (count of hits) is 0 then return "none"
+    focus (item 1 of hits)
+    activate
+  end tell
+  return "focused"
+end run"""
+
+GHOSTTY_OPEN = """on run argv
+  set target to item 1 of argv
+  set cmd to item 2 of argv
+  set title to item 3 of argv
+  tell application "Ghostty"
+    activate
+    set cfg to new surface configuration
+    set initial working directory of cfg to target
+    if (count of windows) is 0 then
+      set win to new window with configuration cfg
+      set t to focused terminal of selected tab of win
+    else
+      set t to focused terminal of (new tab in front window with configuration cfg)
+    end if
+    perform action ("set_tab_title:" & title) on t
+    input text cmd to t
+    send key "enter" to t
+  end tell
+  return "opened"
+end run"""
+
+
+def ghostty(cfg: dict, script: str, *args: str) -> str | None:
+    p = tcall({**cfg, "terminal_timeout_seconds": max(cfg["terminal_timeout_seconds"], GHOSTTY_TIMEOUT)},
+              ["/usr/bin/osascript", "-e", script, "--", *args])
+    if not p or p.returncode != 0:
+        if p:
+            log(f"Ghostty 호출 실패: {p.stderr.strip()[-200:]}")
+        return None
+    return p.stdout.strip()
+
+
+def ghostty_open(cfg: dict, cwd: Path, command: str, title: str) -> bool:
+    """그 폴더의 Ghostty 탭으로 가고, 없으면 새 탭에서 command 를 실행한다."""
+    found = ghostty(cfg, GHOSTTY_FOCUS, str(cwd))
+    if found == "focused":
+        return True
+    if found is None:
+        return False
+    return ghostty(cfg, GHOSTTY_OPEN, str(cwd), command, title) == "opened"
+
+
 def terminal_prepare(cfg: dict, wt: Path, sid: str, title: str, repo_dir: str, base: str, number: int) -> None:
     if cfg["terminal"] != "orca":
         return
@@ -1165,7 +1246,10 @@ def terminal_prepare(cfg: dict, wt: Path, sid: str, title: str, repo_dir: str, b
 
 
 def terminal_send(cfg: dict, wt: Path, text: str) -> bool | None:
-    """열린 리뷰 탭에 프롬프트를 넣는다. True=보냄, False=탭 없음, None=입력창이 비어 있지 않아 미룸."""
+    """열린 리뷰 탭에 프롬프트를 넣는다. True=보냄, False=탭 없음, None=입력창이 비어 있지 않아 미룸.
+
+    Ghostty 는 입력창이 비었는지 읽을 수 없어 넣지 않는다 (쓰던 글에 섞이지 않게). 뒤에서 세션을 갈라 돌린다.
+    """
     if cfg["terminal"] != "orca":
         return False
     tab = orca_tab(cfg, wt)
@@ -1189,6 +1273,8 @@ def open_in_terminal(cfg: dict, cwd: Path, command: str, title: str) -> bool:
             return orca(cfg, "terminal", "switch", "--terminal", tab["handle"]) is not None
         return orca(cfg, "terminal", "create", "--worktree", f"path:{cwd}", "--title", title,
                     "--command", command, "--focus") is not None
+    if cfg["terminal"] == "ghostty":
+        return ghostty_open(cfg, cwd, command, title)
     return False
 
 
@@ -1335,6 +1421,29 @@ def my_action(pr: dict, me: str, release: bool) -> str:
 _cache: dict = {}  # 한 번의 상태 계산 동안만 쓰는 조회 결과
 
 
+def work_tree_for_branch(cfg: dict, repo_dir: str, branch: str) -> str | None:
+    """이 브랜치를 체크아웃한 작업 폴더. Orca 면 Orca 에 등록된 worktree, Ghostty 면 git worktree 목록에서 찾는다."""
+    if cfg["terminal"] == "orca":
+        return orca_worktree_for_branch(cfg, repo_dir, branch)
+    if cfg["terminal"] == "ghostty":
+        return git_worktree_for_branch(cfg, repo_dir, branch)
+    return None
+
+
+def git_worktree_for_branch(cfg: dict, repo_dir: str, branch: str) -> str | None:
+    key = ("git_worktrees", repo_dir)
+    listing = _cache.get(key)
+    if listing is None:
+        listing = _cache[key] = git(cfg, "worktree", "list", "--porcelain", cwd=repo_dir, check=False).stdout
+    path = None
+    for line in listing.splitlines():
+        if line.startswith("worktree "):
+            path = line[len("worktree "):]
+        elif line == f"branch refs/heads/{branch}" and path and not path.startswith(str(WORKTREES) + "/"):
+            return path
+    return None
+
+
 def orca_worktree_for_branch(cfg: dict, repo_dir: str, branch: str) -> str | None:
     """터미널 앱(Orca)에 등록된 worktree 중 이 브랜치를 체크아웃한 곳 (같은 저장소인지까지 확인)."""
     if cfg["terminal"] != "orca":
@@ -1364,7 +1473,7 @@ def opens_for(cfg: dict, repo: str, repo_dir: str, pr: dict, mine: bool, action:
             return "url", pr["url"]
         if action in CHECKS_ACTIONS:
             return "url", pr["url"] + "/checks"
-        if cfg["terminal"] != "none" and orca_worktree_for_branch(cfg, repo_dir, pr["headRefName"]):
+        if cfg["terminal"] != "none" and work_tree_for_branch(cfg, repo_dir, pr["headRefName"]):
             return "session", None
     # 봇 PR 은 내 PR 이지만 리뷰 세션이 있으니 작업 탭이 없으면 리뷰 탭으로 간다
     if has_review_session(cfg, repo, pr["number"], ps):
@@ -1729,7 +1838,7 @@ def open_pr(repo: str, number: int, mine: bool) -> int:
     entry = next((p for p in status.get("prs", []) if p["repo"] == repo and p["number"] == number), None)
     url = entry["url"] if entry else None
     if mine and entry and repo in cfg["repos"]:
-        path = orca_worktree_for_branch(cfg, cfg["repos"][repo], entry["branch"])
+        path = work_tree_for_branch(cfg, cfg["repos"][repo], entry["branch"])
         if path and open_in_terminal(cfg, Path(path), "claude --continue", f"{repo}#{number}"):
             return 0
     ps = state.get("repos", {}).get(repo, {}).get("prs", {}).get(str(number), {})
@@ -1872,9 +1981,6 @@ def install() -> int:
     return 0
 
 
-ORCA_APP = "/Applications/Orca.app/Contents/Resources/bin/orca"
-
-
 def ask(question: str, default: str = "") -> str:
     shown = f" [{default}]" if default else ""
     return input(f"{question}{shown}: ").strip() or default
@@ -2000,13 +2106,14 @@ def setup() -> int:
                 print("  claude 를 찾지 못했다. 설치한 뒤 다시 돌리거나, 리뷰 없이 띠만 쓰려면 n 으로 답하라")
             print(f"  /code-review {cfg['effort']} 로 리뷰하고, 지적마다 실제로 터지는지 한 번 더 검증한 뒤에 알린다")
         print()
-        terminal = "none"
-        if find_tool(paths, "orca"):
-            if ask_yes("PR 을 누르면 Orca 탭(리뷰 세션 · 작업 탭)으로 갈까 (아니면 PR 페이지가 열린다)",
-                       first or cfg["terminal"] == "orca"):
-                terminal = "orca"
-        else:
-            print("Orca 가 없어서 PR 을 누르면 PR 페이지가 열린다")
+        found = [n for n, ok in (("orca", find_tool(paths, "orca")), ("ghostty", ghostty_app())) if ok]
+        print("PR 을 누르면 어디로 갈까. auto=있는 것 중 Orca 먼저, orca · ghostty=그 앱의 탭(리뷰 세션 · 작업 탭), "
+              f"none=PR 페이지 (이 맥에 있는 것: {', '.join(found) or '없음'})")
+        while True:
+            terminal = ask("  터미널", "auto" if first else cfg["terminal_setting"]).lower()
+            if terminal in TERMINALS:
+                break
+            print(f"  {' · '.join(TERMINALS)} 중 하나")
         print()
         setup_notifier(paths)
         print()
@@ -2028,7 +2135,7 @@ def setup() -> int:
                 issue_url_template=tpl, issue_projects=projects, paths=paths)
     write_json(CONFIG, base)
     print(f"\n{CONFIG} 에 저장했다. 다른 값(skip_authors, bot_pr_markers …)은 이 파일에서 고친다")
-    if terminal == "orca":
+    if load_config()["terminal"] == "orca":
         setup_orca(load_config(), repos)
     try:
         go = ask_yes("\n지금 설치(점검 + launchd 등록)할까", True)
