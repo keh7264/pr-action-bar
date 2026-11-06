@@ -2227,6 +2227,10 @@ def plist_text(cfg: dict, python: str) -> str:
 
 def install() -> int:
     ROOT.mkdir(parents=True, exist_ok=True)
+    if read_json_strict(CONFIG, {}) is None:
+        # 깨진 설정을 기본값으로 읽어 paths 만 남긴 채 덮어쓰지 않게 한다
+        print(f"{CONFIG} 가 깨져 있어 설치를 멈춘다. 고친 뒤 다시 한다", file=sys.stderr)
+        return 1
     cfg = load_config()
     if not CONFIG.exists():
         if sys.stdin.isatty():

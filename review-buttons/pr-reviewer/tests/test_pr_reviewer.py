@@ -753,6 +753,14 @@ class Ops(Base):
         self.assertEqual(self.out(self.m.init_config, [], False, None)[0], 1)
         self.assertEqual(self.m.CONFIG.read_text(), '{"repos": {"app": "~/w/app"},')
 
+    def test_깨진_config_json_이면_install_update_가_덮어쓰지_않는다(self):
+        self.m.ROOT.mkdir(parents=True, exist_ok=True)
+        broken = '{"repos": {"app": "~/w/app"}, "bot_logins": ["x"],}'
+        self.m.CONFIG.write_text(broken)
+        self.assertEqual(self.out(self.m.install)[0], 1)
+        self.assertEqual(self.out(self.m.update)[0], 1)
+        self.assertEqual(self.m.CONFIG.read_text(), broken)
+
     def test_prompts_는_기본값을_꺼내고_내_파일은_건드리지_않는다(self):
         self.m.PROMPTS.mkdir(parents=True)
         (self.m.PROMPTS / "reply.md").write_text("내 답글 프롬프트")
