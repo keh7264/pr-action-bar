@@ -244,8 +244,12 @@ def tool(cfg: dict, name: str) -> str:
 
 def run(argv: list[str], *, cwd: str | None = None, timeout: float = 120, check: bool = True,
         input: str | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
-    p = subprocess.run(argv, cwd=cwd, timeout=timeout, capture_output=True, text=True, input=input,
-                       env={**os.environ, **(env or {})})
+    try:
+        p = subprocess.run(argv, cwd=cwd, timeout=timeout, capture_output=True, text=True, input=input,
+                           env={**os.environ, **(env or {})})
+    except subprocess.TimeoutExpired as e:
+        # git · gh 가 응답 없이 멈추는 건 대개 VPN · 네트워크 문제다. PR 실패로 세지 않고 쉬었다가 다시 한다
+        raise Transient("network", short_error(e)) from e
     if check and p.returncode != 0:
         kind = classify(p.stderr)
         msg = f"{Path(argv[0]).name} {argv[1] if len(argv) > 1 else ''} 실패: {p.stderr.strip()[-300:]}"
