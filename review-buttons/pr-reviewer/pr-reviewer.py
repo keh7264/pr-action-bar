@@ -997,7 +997,16 @@ def follow_up(cfg: dict, state: dict, repo: str, repo_dir: str, pr: dict, ps: di
         advance()
         notify(cfg, state, title, f"{kind} {count}개 (자동 리뷰 실패, 직접 확인)", url=pr["url"])
         return
-    commits = commits_since_review(cfg, repo, repo_dir, pr, ps)
+    if terminal_busy(cfg, wt):
+        # git fetch · checkout 보다 먼저 본다. 미루는 동안 폴링마다 fetch 하지 않게
+        log(f"{repo}#{pr['number']} {kind}: 리뷰 탭 입력창이 비어 있지 않아 다음 폴링으로 미룸")
+        return
+    try:
+        commits = commits_since_review(cfg, repo, repo_dir, pr, ps)
+    except Failed as e:
+        # git 이 계속 실패해도 끝없이 다시 하지 않게 답글 실패로 센다 (max_attempts 뒤 알림만)
+        record_reply_failure(cfg, state, repo, pr, ps, short_error(e))
+        return
     text = prompt(prompt_name, NUMBER=pr["number"], COMMITS=commits, **values)
     sent = terminal_send(cfg, wt, " ".join(text.split()))
     if sent is None:
@@ -1303,14 +1312,26 @@ def terminal_send(cfg: dict, wt: Path, text: str) -> bool | None:
     tab = orca_tab(cfg, wt)
     if not tab:
         return False
+    if not orca_input_empty(cfg, tab):
+        return None
+    p = orca(cfg, "terminal", "send", "--terminal", tab["handle"], "--text", text, "--enter")
+    return p is not None
+
+
+def orca_input_empty(cfg: dict, tab: dict) -> bool:
     screen = (orca(cfg, "terminal", "read", "--terminal", tab["handle"], "--screen") or {}).get("terminal", {})
     lines = screen.get("tail") or []
     # ─ 줄 사이에 낀 ❯ 줄이 비어 있으면 입력창이 비었다
     prompt_lines = [l for l in lines if l.lstrip().startswith("❯")]
-    if not prompt_lines or prompt_lines[-1].strip() != "❯":
-        return None
-    p = orca(cfg, "terminal", "send", "--terminal", tab["handle"], "--text", text, "--enter")
-    return p is not None
+    return bool(prompt_lines) and prompt_lines[-1].strip() == "❯"
+
+
+def terminal_busy(cfg: dict, wt: Path) -> bool:
+    """리뷰 탭이 열려 있는데 입력창에 쓰던 글이 있다 (그러면 답글을 넘기지 않고 미룬다)."""
+    if cfg["terminal"] != "orca":
+        return False
+    tab = orca_tab(cfg, wt)
+    return bool(tab) and not orca_input_empty(cfg, tab)
 
 
 def open_in_terminal(cfg: dict, cwd: Path, command: str, title: str) -> bool:

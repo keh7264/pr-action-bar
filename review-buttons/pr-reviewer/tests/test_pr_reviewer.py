@@ -236,6 +236,26 @@ class ConversationReplies(ReplyBase):
         self.assertIn(f"{'c' * 40}..refs/pr-reviewer/1", self.git_calls[0])
         self.assertIn("코드 커밋 없음", self.calls[0])
 
+    def test_리뷰_탭에_쓰던_글이_있으면_git_도_건드리지_않고_미룬다(self):
+        self.m.terminal_busy = lambda cfg, wt: True
+        fetched = []
+        self.m.commits_since_review = lambda *a: fetched.append(1) or ""
+        self.issue = [rc(10, "me", "2026-01-01T00:00:00Z"), rc(11, "alice", "2026-01-02T00:00:00Z")]
+        self.run_check()
+        self.assertEqual((fetched, self.calls, self.ps["issue_cursor"]), ([], [], 0))
+
+    def test_git_이_실패하면_답글_실패로_센다(self):
+        def boom(*a):
+            raise self.m.Failed("git fetch 실패")
+        self.m.commits_since_review = boom
+        self.issue = [rc(10, "me", "2026-01-01T00:00:00Z"), rc(11, "alice", "2026-01-02T00:00:00Z")]
+        for _ in range(self.cfg["max_attempts"]):
+            self.run_check()
+        self.assertEqual(self.ps["reply_failures"], self.cfg["max_attempts"])
+        self.run_check()  # 한도에 닿으면 기준점을 넘기고 알리기만 한다
+        self.assertEqual(self.ps["issue_cursor"], 11)
+        self.assertEqual(self.calls, [])
+
     def test_worktree_를_못_옮기면_그렇다고_적는다(self):
         self.ps["reviewed_sha"] = "a" * 40
         self.m.prepare_worktree = lambda *a: None
