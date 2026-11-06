@@ -105,7 +105,7 @@ python3 pr-reviewer/pr-reviewer.py setup
 | `max_parallel_reviews` | `2` | 동시에 돌릴 리뷰 수. 같은 레포의 fetch · worktree 작업은 레포별 잠금으로 하나씩 한다 |
 | `max_attempts` | `2` | 같은 커밋에서 이만큼 실패하면 그 PR은 자동 리뷰를 멈추고 알려 준다 |
 | `skip_authors` | `[]` | 리뷰하지 않을 작성자. 내 PR은 원래 리뷰하지 않는다 |
-| `bot_logins` | `[]` | 사람 답글로 치지 않을 계정 (사내 리뷰 봇 등). `[bot]`으로 끝나는 계정과 `github-actions`, `dependabot`, `renovate`, `coderabbitai`, `Copilot`은 원래 뺀다 |
+| `bot_logins` | `[]` | 사람 답글로 치지 않을 계정 (팀에서 돌리는 리뷰 봇 등). `[bot]`으로 끝나는 계정과 `github-actions`, `dependabot`, `renovate`, `coderabbitai`, `Copilot`은 원래 뺀다 |
 | `bot_pr_markers` | `[]` | 내가 돌리는 봇이 연 PR의 제목 표시. 내 PR로 치고, 리뷰도 "내가 고칠 목록" 모양으로 정리한다. 다른 사람이 남긴 피드백도 고칠 목록으로 만든다 (아래 "봇 PR") |
 | `release_pr_authors`, `release_pr_title_pattern` | | CI가 여는 릴리스 머지 PR. 리뷰하지 않고 왜 막혔는지만 보여 준다 |
 | `pause_minutes` | `30` | 사용 한도, 네트워크, 로그인 문제로 실패했을 때 리뷰를 쉬는 시간 |

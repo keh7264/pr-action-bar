@@ -74,7 +74,7 @@ DEFAULT_CONFIG = {
     # 같은 커밋 max_attempts 회, PR 전체 2*max_attempts 회 실패하면 자동 리뷰를 멈춘다
     "max_attempts": 2,
     "skip_authors": [],
-    # 사람 답글로 치지 않을 계정 (사내 리뷰 봇 등). [bot] 으로 끝나는 계정과 잘 알려진 봇은 원래 뺀다
+    # 사람 답글로 치지 않을 계정 (팀에서 돌리는 리뷰 봇 등). [bot] 으로 끝나는 계정과 잘 알려진 봇은 원래 뺀다
     "bot_logins": [],
     # 내가 만든 봇이 연 PR 의 제목 표시. 이 PR 은 My PR 로 보고 "수정 지시" 형태로 리뷰한다
     "bot_pr_markers": [],
