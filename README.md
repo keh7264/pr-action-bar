@@ -92,7 +92,7 @@ claude plugin install review-buttons@pr-action-bar
 
 `~/.pr-reviewer/prompts/<이름>.md`에 파일을 두면 기본 프롬프트 대신 그걸 쓴다. 이름은 `review`, `recheck`, `recheck_bot`, `summarize`, `summarize_bot`, `reply`다. 팀 리뷰 기준만 덧붙이고 싶으면 `extra-criteria.md`에 적으면 재검토 단계에 들어간다.
 
-프롬프트 안에서는 `{{NUMBER}}`, `{{EFFORT}}`, `{{LANGUAGE}}`, `{{THREAD_FILE}}`, `{{COMMITS}}`, `{{EXTRA_CRITERIA}}`, `{{FORMAT}}`을 쓸 수 있다. `{{COMMITS}}`는 `reply`에서 쓰고, 지난 리뷰 뒤에 올라온 커밋 목록(base 머지 제외)이 들어간다. `summarize`가 내는 마크다운은 리뷰 탭에서 그대로 읽히고 리뷰 파일 본문이 된다. 지적마다 붙는 `` `경로:줄` · 꼭 수정 `` 줄로 리뷰 파일 머리의 개수를 세니, 바꾸더라도 `{{FORMAT}}`은 남겨 두는 게 좋다.
+프롬프트 안에서는 `{{NUMBER}}`, `{{EFFORT}}`, `{{LANGUAGE}}`, `{{THREAD_FILE}}`, `{{COMMITS}}`, `{{EXTRA_CRITERIA}}`, `{{FORMAT}}`을 쓸 수 있다. `{{COMMITS}}`는 `reply`에서 쓰고, 지난 리뷰 뒤에 올라온 커밋 목록(base 머지 제외)이 들어간다. `summarize`는 JSON(`pr_summary`, `findings`)으로 답하게 돼 있고, 스크립트가 그걸 읽어 리뷰 파일(마크다운)을 그리고 분류(꼭 수정 · 자잘한 수정 · 넘겨도 됨)를 센다. JSON 모양이 깨지면 원문을 그대로 리뷰 파일에 두고 알림과 리뷰 파일 머리에 "형식 확인 필요"라고 적는다. 그래서 프롬프트를 바꾸더라도 `{{FORMAT}}`은 남겨 둔다. 읽어 낸 JSON은 리뷰 파일 옆에 `<번호>-<커밋>.json`으로 같이 둔다.
 
 ## 띠 읽는 법
 
@@ -152,7 +152,7 @@ python3 ~/.pr-reviewer/bin/pr-reviewer.py doctor        # 설치 상태만 점�
 python3 ~/.pr-reviewer/bin/pr-reviewer.py uninstall     # launchd에서 뺀다 (기록과 worktree는 남는다)
 ```
 
-로그는 `~/.pr-reviewer/logs/pr-reviewer.log`, 리뷰 파일은 `~/.pr-reviewer/reviews/<repo>/<번호>-<커밋>.md`에 쌓인다.
+로그는 `~/.pr-reviewer/logs/pr-reviewer.log`, 리뷰 파일은 `~/.pr-reviewer/reviews/<repo>/<번호>-<커밋>.md`(JSON은 같은 이름의 `.json`)에 쌓인다. 리뷰 탭의 마지막 답은 JSON이라, 읽기 좋은 모양은 띠의 "리뷰 파일"로 본다.
 
 ## 라이선스
 

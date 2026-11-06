@@ -228,6 +228,93 @@ class ConversationReplies(Base):
         self.assertIn("옮기지 못했다", self.calls[0])
 
 
+REVIEW_JSON = {
+    "pr_summary": "결제 완료 문구를 바꾼다. null 처리가 빠졌다.",
+    "findings": [
+        {"title": "문구 오타", "location": "a.ts:3", "category": "넘겨도 됨", "problem": "오타",
+         "scenario": "항상", "fix": "고친다", "reason": "표시만"},
+        {"title": "null 이면 터진다", "location": "b.ts:10", "category": "꼭 수정", "problem": "user 가 null",
+         "scenario": "비회원 결제", "fix": "가드 추가\n```diff\n- a.b\n+ a?.b\n```", "reason": "호출부에서 null 가능"},
+    ],
+}
+
+
+class ReviewFormat(Base):
+    pr = {"number": 1, "title": "feat: x", "url": "u", "headRefOid": "a" * 40}
+
+    def render(self, raw: str):
+        return self.m.render_review("app", self.pr, raw, "sid", Path("/wt"), 65)
+
+    def test_JSON_을_마크다운으로_그리고_분류를_센다(self):
+        text, data = self.render(json.dumps(REVIEW_JSON, ensure_ascii=False))
+        self.assertIsNotNone(data)
+        self.assertIn("꼭 1 · 넘겨도 1", text)
+        self.assertLess(text.index("null 이면 터진다"), text.index("문구 오타"))  # 꼭 수정이 먼저
+        self.assertIn("`b.ts:10` · 꼭 수정", text)
+        self.assertIn("```diff\n- a.b\n+ a?.b\n```", text)
+
+    def test_코드블록이나_앞뒤_말이_붙어도_읽는다(self):
+        body = json.dumps(REVIEW_JSON, ensure_ascii=False)
+        for raw in (f"```json\n{body}\n```", f"정리했습니다.\n{body}\n끝"):
+            self.assertIsNotNone(self.m.parse_review(raw), raw[:20])
+
+    def test_지적이_없으면_지적_없음(self):
+        text, data = self.render('{"pr_summary": "괜찮다", "findings": []}')
+        self.assertIn("· 지적 없음", text)
+
+    def test_형식이_깨지면_원문을_보존하고_형식_확인_필요(self):
+        raw = "## PR 요약\n\n마크다운으로 답해 버렸다"
+        text, data = self.render(raw)
+        self.assertIsNone(data)
+        self.assertIn("형식 확인 필요", text)
+        self.assertIn("마크다운으로 답해 버렸다", text)
+
+    def test_모르는_분류는_따로_센다(self):
+        bad = {"pr_summary": "s", "findings": [{"title": "t", "category": "중요"}]}
+        self.assertEqual(self.m.tally_of(bad), "분류 확인 필요 1")
+
+
+class ReviewFlow(Base):
+    """review_pr 한 바퀴: 리뷰 → 재검토 → 정리, 리뷰 파일 · JSON · 알림."""
+
+    def setUp(self):
+        super().setUp()
+        self.cfg = self.config(repos={"app": "/repo"})
+        self.state, self.prompts, self.notes = {}, [], []
+        m = self.m
+        self.pr = {"number": 1, "title": "feat: x", "url": "u", "headRefOid": "a" * 40, "baseRefName": "main",
+                   "state": "OPEN", "isDraft": False, "author": {"login": "alice"}}
+        m.view_pr = lambda *a: dict(self.pr)
+        m.cursors_now = lambda *a: {"reply_cursor": 5, "issue_cursor": 7}
+        m.prepare_worktree = lambda cfg, repo, repo_dir, pr, ps: self.home / "wt-app-1"
+        m.write_status_safely = lambda *a: None
+        m.terminal_prepare = lambda *a, **k: None
+        m.notify = lambda cfg, state, title, msg, **k: self.notes.append(title)
+        self.final = json.dumps(REVIEW_JSON, ensure_ascii=False)
+
+        def fake_claude(cfg, wt, text, **k):
+            self.prompts.append(text)
+            return {"session_id": "sid", "result": self.final if len(self.prompts) == 3 else "..."}
+        m.claude = fake_claude
+
+    def test_리뷰_파일과_JSON_을_쓰고_알린다(self):
+        self.m.review_pr(self.cfg, self.state, "app", "/repo", self.pr)
+        ps = self.state["repos"]["app"]["prs"]["1"]
+        self.assertEqual(len(self.prompts), 3)
+        self.assertTrue(self.prompts[0].startswith("/code-review 1 high"))
+        self.assertIn("JSON", self.prompts[2])
+        self.assertTrue(Path(ps["review_file"]).exists())
+        self.assertTrue(Path(ps["review_file"]).with_suffix(".json").exists())
+        self.assertEqual((ps["reply_cursor"], ps["issue_cursor"], ps["format_ok"]), (5, 7, True))
+        self.assertEqual(self.notes, ["app#1 리뷰 완료"])
+
+    def test_형식이_깨지면_알림에_적는다(self):
+        self.final = "그냥 글"
+        self.m.review_pr(self.cfg, self.state, "app", "/repo", self.pr)
+        self.assertEqual(self.notes, ["app#1 리뷰 완료 (형식 확인 필요)"])
+        self.assertFalse(self.state["repos"]["app"]["prs"]["1"]["format_ok"])
+
+
 def re_find_path(text: str) -> str:
     import re
     return re.search(r"(/\S+\.md)", text).group(1)
