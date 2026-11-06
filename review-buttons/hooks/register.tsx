@@ -9,7 +9,8 @@ const status = atom({ plugin: 'review-buttons', key: 'status' } as const, EMPTY)
 const thisPr = atom({ plugin: 'review-buttons', key: 'thisPr' } as const, null)
 const refreshing = atom({ plugin: 'review-buttons', key: 'refreshing' } as const, false)
 
-const CLICK_TIMEOUT_MS = 20_000
+// 클릭 한 번에 Orca CLI 나 git 을 여러 번 부를 수 있다
+const CLICK_TIMEOUT_MS = 60_000
 
 // 색은 괄호와 상태 이름에만 넣는다. 테마 키라서 라이트 테마에서는 다른 값으로 바뀐다
 const ACTION_COLORS: Record<string, string> = {
