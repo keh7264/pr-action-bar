@@ -11,6 +11,7 @@ launchd 가 poll_minutes(기본 5분)마다 `pr-reviewer.py` 를 실행한다. �
   pr-reviewer.py REPO N                그 PR 을 지금 리뷰 (이미 리뷰했어도 다시)
   pr-reviewer.py --refresh [--full]    status.json 즉시 갱신 (--full: 정규 폴링도 kickstart)
   pr-reviewer.py --open REPO N [--mine]  PR 의 리뷰 세션/작업 탭/PR 페이지 열기
+  pr-reviewer.py --orca-sync           리뷰 worktree 의 Orca 이름 · 자리 · 상태를 다시 맞춤
   pr-reviewer.py setup                 묻고 답하며 설정한 뒤 설치
   pr-reviewer.py install | uninstall | doctor
 """
@@ -833,7 +834,7 @@ def review_pr(cfg: dict, state: dict, repo: str, repo_dir: str, pr: dict) -> Non
         write_json(out.with_suffix(".json"), data)
     # 결과를 먼저 저장한다. 알림이나 터미널이 멈춰도 다음 폴링이 처음부터 다시 돌지 않게
     ps.update(reviewed_at=iso(), session_id=sid, review_file=str(out), reviewed_sha=pr["headRefOid"],
-              seconds=seconds, format_ok=data is not None)
+              seconds=seconds, format_ok=data is not None, title=pr["title"])
     ps.pop("reviewing_since", None)
     ps.pop("failures", None)
     state.get("notified", {}).clear()
@@ -841,7 +842,7 @@ def review_pr(cfg: dict, state: dict, repo: str, repo_dir: str, pr: dict) -> Non
     log(f"{repo}#{pr['number']} 리뷰 완료 ({seconds}초) → {out}")
     done = "리뷰 완료" if data is not None else "리뷰 완료 (형식 확인 필요)"
     notify(cfg, state, f"{repo}#{pr['number']} {done}", pr["title"][:100], url=pr["url"])
-    terminal_prepare(cfg, wt, sid, f"{repo}#{pr['number']}", repo_dir, pr["baseRefName"], pr["number"])
+    terminal_prepare(cfg, wt, sid, f"{repo}#{pr['number']}", repo_dir, pr["baseRefName"], pr["number"], pr["title"])
 
 
 # ───────────────────────── 답글 리뷰 ─────────────────────────
@@ -992,6 +993,7 @@ def follow_up(cfg: dict, state: dict, repo: str, repo_dir: str, pr: dict, ps: di
     advance()
     ps["replied_at"] = iso()
     ps["seen_sha"] = pr["headRefOid"]
+    orca_mark_unread(cfg, wt)
     notify(cfg, state, title, f"{kind} {count}개 리뷰", url=pr["url"])
 
 
@@ -1166,16 +1168,36 @@ def orca_tab(cfg: dict, wt: Path) -> dict | None:
     return max(tabs, key=lambda t: t.get("lastOutputAt") or "", default=None)
 
 
-def orca_nest(cfg: dict, wt: Path, repo_dir: str, base: str | None, number: int) -> None:
-    """리뷰 worktree 를 기본 브랜치 worktree 아래로 넣어 작업 worktree 와 섞이지 않게 한다. 실패해도 넘어간다."""
+ORCA_TITLE_MAX = 40
+
+
+def review_display_name(number: int, title: str) -> str:
+    title = " ".join((title or "").split())
+    if len(title) > ORCA_TITLE_MAX:
+        title = title[:ORCA_TITLE_MAX - 1] + "…"
+    return f"리뷰 #{number} {title}".strip()
+
+
+def orca_nest(cfg: dict, wt: Path, repo_dir: str, base: str | None, number: int, title: str = "") -> bool:
+    """리뷰 worktree 를 기본 브랜치 worktree 아래로 넣고 "리뷰 #번호 제목" 이름 · In review 상태로 둔다.
+
+    작업 worktree 와 섞이지 않게 하려는 것이라 실패해도 넘어간다. 성공하면 True.
+    """
     if cfg["terminal"] != "orca":
-        return
+        return False
     if not base:
         head = git(cfg, "symbolic-ref", "--short", "refs/remotes/origin/HEAD", cwd=repo_dir, check=False).stdout.strip()
         base = head.removeprefix("origin/") or None
     parent = (orca_worktree_for_branch(cfg, repo_dir, base) if base else None) or repo_dir
-    orca(cfg, "worktree", "set", "--worktree", f"path:{wt}", "--parent-worktree", f"path:{parent}",
-         "--display-name", f"#{number} 리뷰", "--pr", str(number))
+    return orca(cfg, "worktree", "set", "--worktree", f"path:{wt}", "--parent-worktree", f"path:{parent}",
+                "--display-name", review_display_name(number, title), "--pr", str(number),
+                "--workspace-status", "in-review") is not None
+
+
+def orca_mark_unread(cfg: dict, wt: Path) -> None:
+    """리뷰 · 답글 리뷰가 끝났다고 Orca 사이드바에 표시한다."""
+    if cfg["terminal"] == "orca":
+        orca(cfg, "worktree", "set", "--worktree", f"path:{wt}", "--unread")
 
 
 GHOSTTY_TIMEOUT = 20  # 처음에는 macOS 가 "Ghostty 제어 허용"을 물어 오래 걸릴 수 있다
@@ -1234,15 +1256,16 @@ def ghostty_open(cfg: dict, cwd: Path, command: str, title: str) -> bool:
     return ghostty(cfg, GHOSTTY_OPEN, str(cwd), command, title) == "opened"
 
 
-def terminal_prepare(cfg: dict, wt: Path, sid: str, title: str, repo_dir: str, base: str, number: int) -> None:
+def terminal_prepare(cfg: dict, wt: Path, sid: str, label: str, repo_dir: str, base: str, number: int,
+                     pr_title: str = "") -> None:
     if cfg["terminal"] != "orca":
         return
-    orca_nest(cfg, wt, repo_dir, base, number)
-    if orca_tab(cfg, wt):
-        return
-    # --focus 를 주지 않으면 포커스를 가져가지 않는다
-    orca(cfg, "terminal", "create", "--worktree", f"path:{wt}", "--title", title,
-         "--command", resume_command(cfg, sid))
+    orca_nest(cfg, wt, repo_dir, base, number, pr_title)
+    if not orca_tab(cfg, wt):
+        # --focus 를 주지 않으면 포커스를 가져가지 않는다
+        orca(cfg, "terminal", "create", "--worktree", f"path:{wt}", "--title", label,
+             "--command", resume_command(cfg, sid))
+    orca_mark_unread(cfg, wt)
 
 
 def terminal_send(cfg: dict, wt: Path, text: str) -> bool | None:
@@ -1845,7 +1868,7 @@ def open_pr(repo: str, number: int, mine: bool) -> int:
     wt = worktree_path(repo, number)
     if has_review_session(cfg, repo, number, ps):
         if repo in cfg["repos"]:
-            orca_nest(cfg, wt, cfg["repos"][repo], None, number)
+            orca_nest(cfg, wt, cfg["repos"][repo], None, number, entry["title"] if entry else ps.get("title", ""))
         if open_in_terminal(cfg, wt, resume_command(cfg, ps["session_id"]), f"{repo}#{number}"):
             return 0
     if url:
@@ -1853,6 +1876,31 @@ def open_pr(repo: str, number: int, mine: bool) -> int:
         return 0
     print(f"{repo}#{number} 를 status.json 에서 찾지 못했다", file=sys.stderr)
     return 1
+
+
+def orca_sync() -> int:
+    """남아 있는 리뷰 worktree 의 Orca 이름 · 부모 · In review 상태를 다시 맞춘다 (업데이트 뒤, Orca 를 다시 깐 뒤)."""
+    cfg = load_config()
+    if cfg["terminal"] != "orca":
+        print(f"terminal 이 orca 가 아니다 (지금: {cfg['terminal']})", file=sys.stderr)
+        return 1
+    state = read_json(STATE, {})
+    titles = {(p["repo"], p["number"]): p["title"] for p in read_json(STATUS, {}).get("prs", [])}
+    done, failed = 0, []
+    for repo, rs in state.get("repos", {}).items():
+        if repo not in cfg["repos"]:
+            continue
+        for key, ps in rs.get("prs", {}).items():
+            wt = worktree_path(repo, int(key))
+            if not wt.exists():
+                continue
+            title = titles.get((repo, int(key)), ps.get("title", ""))
+            if orca_nest(cfg, wt, cfg["repos"][repo], None, int(key), title):
+                done += 1
+            else:
+                failed.append(f"{repo}#{key}")
+    print(f"Orca 에 맞춘 리뷰 worktree {done}개" + (f", 실패: {', '.join(failed)}" if failed else ""))
+    return 1 if failed else 0
 
 
 # ───────────────────────── install / doctor ─────────────────────────
@@ -2168,6 +2216,7 @@ def main() -> int:
     ap.add_argument("--full", action="store_true")
     ap.add_argument("--open", nargs=2, metavar=("REPO", "NUMBER"))
     ap.add_argument("--mine", action="store_true")
+    ap.add_argument("--orca-sync", action="store_true", help="리뷰 worktree 의 Orca 이름 · 자리 · 상태를 다시 맞춘다")
     args = ap.parse_args()
     words = args.command
     if len(words) == 2 and words[1].isdigit():
@@ -2180,6 +2229,8 @@ def main() -> int:
             return refresh(args.full)
         if args.open:
             return open_pr(args.open[0], int(args.open[1]), args.mine)
+        if args.orca_sync:
+            return orca_sync()
         if args.command == "setup":
             return setup()
         if args.command == "install":

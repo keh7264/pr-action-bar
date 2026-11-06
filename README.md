@@ -130,7 +130,9 @@ orca repo add --path ~/work/app
 orca repo set --repo path:$HOME/work/app --external-worktree-visibility show
 ```
 
-리뷰 worktree는 Orca 사이드바에서 그 레포의 기본 브랜치 worktree 아래에 `#1235 리뷰` 같은 이름으로 들어간다. 그래서 리뷰가 쌓여도 작업하던 worktree와 섞이지 않는다. 기본 브랜치를 체크아웃한 worktree가 Orca에 없으면 `repos`에 적은 경로 아래로 넣는다.
+리뷰 worktree는 Orca 사이드바에서 그 레포의 기본 브랜치 worktree 아래에 `리뷰 #1235 feat: 결제 완료 화면…` 같은 이름으로 들어가고, 보드 상태는 In review가 된다. 그래서 리뷰가 쌓여도 작업하던 worktree와 섞이지 않는다. 기본 브랜치를 체크아웃한 worktree가 Orca에 없으면 `repos`에 적은 경로 아래로 넣는다. 리뷰가 끝나거나 답글 · 피드백 리뷰가 끝나면 그 worktree에 읽지 않음 표시를 켠다.
+
+업데이트하기 전에 만든 리뷰 worktree나 Orca를 다시 깐 뒤에는 `pr-reviewer.py --orca-sync`로 이름 · 자리 · 상태를 한 번에 다시 맞춘다.
 
 리뷰 탭을 처음 열 때 Claude Code가 이 폴더를 믿을지 한 번 물어본다.
 
@@ -166,6 +168,7 @@ python3 ~/.pr-reviewer/bin/pr-reviewer.py              # 폴링 한 번
 python3 ~/.pr-reviewer/bin/pr-reviewer.py repo-a 1235   # 그 PR을 지금 리뷰 (이미 리뷰했거나 자동 리뷰가 멈췄어도 다시)
 python3 ~/.pr-reviewer/bin/pr-reviewer.py --refresh     # status.json만 바로 갱신 (--full이면 리뷰 폴링도 같이)
 python3 ~/.pr-reviewer/bin/pr-reviewer.py --open repo-a 1235 [--mine]
+python3 ~/.pr-reviewer/bin/pr-reviewer.py --orca-sync     # 리뷰 worktree의 Orca 이름 · 자리 · In review 상태를 다시 맞춘다
 python3 ~/.pr-reviewer/bin/pr-reviewer.py setup         # 설정을 묻고 답하며 다시 고친다
 python3 ~/.pr-reviewer/bin/pr-reviewer.py doctor        # 설치 상태만 점검
 python3 ~/.pr-reviewer/bin/pr-reviewer.py uninstall     # launchd에서 뺀다 (기록과 worktree는 남는다)

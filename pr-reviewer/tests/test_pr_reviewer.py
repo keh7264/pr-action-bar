@@ -600,6 +600,58 @@ class Terminals(Base):
         self.assertIsNone(self.m.work_tree_for_branch(cfg, "/w/app", "nope"))
 
 
+class OrcaDetails(Base):
+    def setUp(self):
+        super().setUp()
+        self.cfg = self.config(repos={"app": "/w/app"}, terminal="orca")
+        self.calls, self.tabs = [], []
+        m = self.m
+        m.orca = lambda cfg, *args: self.calls.append(list(args)) or ({"terminals": self.tabs} if "list" in args else {})
+        m.git = lambda cfg, *a, cwd, **k: subprocess.CompletedProcess(a, 0, "origin/main\n", "")
+        m.orca_worktree_for_branch = lambda cfg, repo_dir, branch: "/w/app" if branch == "main" else None
+
+    def sets(self):
+        return [c for c in self.calls if c[:2] == ["worktree", "set"]]
+
+    def test_리뷰가_끝나면_이름_상태_unread_를_맞추고_탭을_연다(self):
+        self.m.terminal_prepare(self.cfg, Path("/wt/app-7"), "sid", "app#7", "/w/app", "main", 7, "feat: 결제 완료 화면 안내 문구 수정")
+        nest, unread = self.sets()
+        self.assertEqual(nest[nest.index("--display-name") + 1], "리뷰 #7 feat: 결제 완료 화면 안내 문구 수정")
+        self.assertEqual(nest[nest.index("--workspace-status") + 1], "in-review")
+        self.assertEqual(nest[nest.index("--parent-worktree") + 1], "path:/w/app")
+        self.assertIn("--unread", unread)
+        self.assertTrue(any(c[:2] == ["terminal", "create"] for c in self.calls))
+
+    def test_긴_제목은_줄인다(self):
+        name = self.m.review_display_name(7, "가" * 100)
+        self.assertEqual(len(name), len("리뷰 #7 ") + self.m.ORCA_TITLE_MAX)
+        self.assertTrue(name.endswith("…"))
+
+    def test_orca_sync_는_남은_리뷰_worktree_를_다시_맞춘다(self):
+        for n in (1, 2):
+            self.m.worktree_path("app", n).mkdir(parents=True)
+        self.m.write_json(self.m.STATE, {"repos": {"app": {"prs": {"1": {"title": "옛 제목"}, "2": {}, "3": {}}},
+                                                   "gone": {"prs": {"1": {}}}}})
+        self.m.write_json(self.m.STATUS, {"prs": [{"repo": "app", "number": 2, "title": "새 제목"}]})
+        self.assertEqual(self.m.orca_sync(), 0)
+        names = sorted(c[c.index("--display-name") + 1] for c in self.sets())
+        self.assertEqual(names, ["리뷰 #1 옛 제목", "리뷰 #2 새 제목"])
+
+    def test_orca_가_아니면_orca_sync_는_실패(self):
+        self.config(repos={}, terminal="none")
+        self.assertEqual(self.m.orca_sync(), 1)
+
+
+class OrcaReplyUnread(ReplyBase):
+    def test_답글_리뷰가_끝나면_unread(self):
+        self.cfg = self.config(repos={"app": str(self.home)}, terminal="orca")
+        marks = []
+        self.m.orca_mark_unread = lambda cfg, wt: marks.append(wt)
+        self.issue = [rc(10, "me", "2026-01-01T00:00:00Z"), rc(11, "alice", "2026-01-02T00:00:00Z")]
+        self.m.check_replies(self.cfg, self.state, "me", "app", "/repo", self.pr)
+        self.assertEqual(marks, [self.m.worktree_path("app", 1)])
+
+
 def re_find_path(text: str) -> str:
     import re
     return re.search(r"(/\S+\.md)", text).group(1)
