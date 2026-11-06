@@ -22,7 +22,7 @@ PR 상태를 Slack 알림 대신 Claude Code 입력창 바로 위에 띄우고, 
 ## 필요한 것
 
 - macOS (launchd, `caffeinate`, `open`을 쓴다)
-- Python 3.10 이상, git, 로그인된 [GitHub CLI](https://cli.github.com/) (`gh auth login`)
+- Python 3.9 이상 (macOS 기본 `python3` 도 된다), git, 로그인된 [GitHub CLI](https://cli.github.com/) (`gh auth login`)
 - [Claude Code](https://claude.com/claude-code). mod를 지원하는 버전이어야 하고, 자동 리뷰를 쓰면 `/code-review` 스킬도 있어야 한다
 - 있으면 좋은 것: `terminal-notifier` (알림을 누르면 PR이 열린다. `setup`이 brew로 깔아 준다), Orca (리뷰 세션을 탭으로 연다)
 
