@@ -137,6 +137,12 @@ class ConversationStatus(Base):
                     comments={"nodes": [gc("bob", "2026-01-02T00:00:01Z")]})
         self.assertEqual(self.m.my_action(pr, "me", False), "Merge")
 
+    def test_승인했다가_변경_요청한_사람의_질문은_Reply(self):
+        pr = gql_pr(author={"login": "me"}, reviews={"nodes": [gr("bob", "APPROVED", "2026-01-01T00:00:00Z"),
+                                                               gr("bob", "CHANGES_REQUESTED", "2026-01-02T00:00:00Z")]},
+                    comments={"nodes": [gc("bob", "2026-01-03T00:00:00Z")]})
+        self.assertEqual(self.m.my_action(pr, "me", False), "Reply")
+
     def test_내가_답한_뒤에는_Reply_가_아니다(self):
         pr = gql_pr(author={"login": "me"}, comments={"nodes": [gc("bob", "2026-01-02T00:00:00Z"),
                                                                  gc("me", "2026-01-03T00:00:00Z")]})

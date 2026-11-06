@@ -1378,9 +1378,12 @@ def conversation_replies(pr: dict, me: str, my_comments: list | None = None, my_
     last_me = max(my_times, default="")
     approved_at: dict[str, str] = {}
     if approved_skip:
-        for r in reviews:
-            if r["state"] == "APPROVED" and r.get("submittedAt"):
-                approved_at[login_of(r)] = min(approved_at.get(login_of(r), r["submittedAt"]), r["submittedAt"])
+        # 사람마다 마지막 결정(승인 · 변경 요청)이 승인일 때만 그 승인 뒤 댓글을 뺀다
+        for r in sorted((r for r in reviews if r.get("submittedAt")), key=lambda r: r["submittedAt"]):
+            if r["state"] == "APPROVED":
+                approved_at[login_of(r)] = r["submittedAt"]
+            elif r["state"] == "CHANGES_REQUESTED":
+                approved_at.pop(login_of(r), None)
     out = []
     for c in comments:
         who = login_of(c)
