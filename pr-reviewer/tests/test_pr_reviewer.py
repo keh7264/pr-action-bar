@@ -88,5 +88,119 @@ class PollMinutes(Base):
         self.assertEqual(self.config(repos={}, poll_minutes=0)["poll_minutes"], 1)
 
 
+def gc(login: str, at: str) -> dict:
+    """GraphQL 대화 탭 댓글."""
+    return {"author": {"login": login}, "createdAt": at}
+
+
+def gr(login: str, state: str, at: str) -> dict:
+    return {"author": {"login": login}, "state": state, "submittedAt": at, "commit": {"oid": "a" * 40}}
+
+
+class ConversationStatus(Base):
+    def setUp(self):
+        super().setUp()
+        self.config(repos={})
+
+    def test_내_댓글_뒤에_작성자가_대화_탭에_답하면_Re_review(self):
+        pr = gql_pr(comments={"nodes": [gc("me", "2026-01-01T00:00:00Z"), gc("alice", "2026-01-02T00:00:00Z")]})
+        self.assertEqual(self.m.team_action(pr, "me", {}, False), "Re-review")
+
+    def test_내가_승인한_뒤의_댓글은_세지_않는다(self):
+        pr = gql_pr(reviews={"nodes": [gr("me", "APPROVED", "2026-01-01T00:00:00Z")]},
+                    comments={"nodes": [gc("alice", "2026-01-02T00:00:00Z")]})
+        self.assertEqual(self.m.team_action(pr, "me", {}, False), "Approved")
+
+    def test_내가_아무것도_안_남긴_PR_의_대화는_세지_않는다(self):
+        pr = gql_pr(comments={"nodes": [gc("alice", "2026-01-02T00:00:00Z")]})
+        self.assertEqual(self.m.team_action(pr, "me", {}, False), "Needs review")
+
+    def test_봇_댓글은_세지_않는다(self):
+        pr = gql_pr(comments={"nodes": [gc("me", "2026-01-01T00:00:00Z"), gc("sonar[bot]", "2026-01-02T00:00:00Z")]})
+        self.assertNotEqual(self.m.team_action(pr, "me", {}, False), "Re-review")
+
+    def test_내_PR_대화_탭에_질문이_오면_Reply(self):
+        pr = gql_pr(author={"login": "me"}, comments={"nodes": [gc("bob", "2026-01-02T00:00:00Z")]})
+        self.assertEqual(self.m.my_action(pr, "me", False), "Reply")
+
+    def test_내_PR_에서_승인한_사람의_승인_뒤_댓글은_Reply_가_아니다(self):
+        pr = gql_pr(author={"login": "me"}, reviewDecision="APPROVED",
+                    reviews={"nodes": [gr("bob", "APPROVED", "2026-01-02T00:00:00Z")]},
+                    comments={"nodes": [gc("bob", "2026-01-02T00:00:01Z")]})
+        self.assertEqual(self.m.my_action(pr, "me", False), "Merge")
+
+    def test_내가_답한_뒤에는_Reply_가_아니다(self):
+        pr = gql_pr(author={"login": "me"}, comments={"nodes": [gc("bob", "2026-01-02T00:00:00Z"),
+                                                                 gc("me", "2026-01-03T00:00:00Z")]})
+        self.assertNotEqual(self.m.my_action(pr, "me", False), "Reply")
+
+
+def rc(id_: int, login: str, at: str, body: str = "...", **over) -> dict:
+    """REST 댓글 (리뷰 스레드 · 대화 탭 공통)."""
+    return {"id": id_, "user": {"login": login}, "created_at": at, "body": body, **over}
+
+
+class ConversationReplies(Base):
+    """check_replies: 대화 탭 댓글도 답글 리뷰로 넘긴다."""
+
+    def setUp(self):
+        super().setUp()
+        self.cfg = self.config(repos={"app": str(self.home)})
+        self.state = {}
+        self.ps = self.m.pr_state(self.state, "app", 1)
+        self.ps.update(session_id="sid", reply_cursor=0, issue_cursor=0)
+        self.m.worktree_path("app", 1).mkdir(parents=True)
+        self.threads, self.issue, self.reviews, self.calls = [], [], [], []
+        m = self.m
+        m.review_comments = lambda *a: self.threads
+        m.issue_comments = lambda *a: self.issue
+        m.pr_reviews = lambda *a: self.reviews
+        m.terminal_send = lambda *a: False
+        m.notify = lambda *a, **k: None
+        m.claude = lambda cfg, wt, text, **k: self.calls.append(text) or {"result": "답글 리뷰"}
+        self.pr = {"number": 1, "url": "u", "headRefOid": "a" * 40}
+
+    def run_check(self):
+        self.m.check_replies(self.cfg, self.state, "me", "app", "/repo", self.pr)
+
+    def test_작성자가_대화_탭에_답하면_답글_리뷰를_돌린다(self):
+        self.issue = [rc(10, "me", "2026-01-01T00:00:00Z", "이 부분 확인 부탁"),
+                      rc(11, "alice", "2026-01-02T00:00:00Z", "고쳤습니다")]
+        self.run_check()
+        self.assertEqual(len(self.calls), 1)
+        thread_file = re_find_path(self.calls[0])
+        text = Path(thread_file).read_text()
+        self.assertIn("## 대화 탭", text)
+        self.assertIn("고쳤습니다", text)
+        self.assertEqual(self.ps["issue_cursor"], 11)
+
+    def test_승인_뒤_댓글과_봇_댓글은_넘기지_않는다(self):
+        self.reviews = [{"id": 1, "user": {"login": "me"}, "state": "APPROVED", "submitted_at": "2026-01-01T00:00:00Z"}]
+        self.issue = [rc(11, "alice", "2026-01-02T00:00:00Z", "감사합니다"),
+                      rc(12, "ci[bot]", "2026-01-02T00:00:00Z")]
+        self.run_check()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.ps["issue_cursor"], 12)
+
+    def test_예전_상태에는_대화_기준점을_지금으로_잡는다(self):
+        del self.ps["issue_cursor"]
+        self.issue = [rc(10, "me", "2026-01-01T00:00:00Z"), rc(11, "alice", "2026-01-02T00:00:00Z")]
+        self.run_check()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.ps["issue_cursor"], 11)
+
+    def test_리뷰_스레드_답글도_그대로_본다(self):
+        self.threads = [rc(5, "me", "2026-01-01T00:00:00Z", "여기 null?", path="a.py", line=3),
+                        rc(6, "alice", "2026-01-02T00:00:00Z", "막혀 있어요", in_reply_to_id=5)]
+        self.run_check()
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.ps["reply_cursor"], 6)
+
+
+def re_find_path(text: str) -> str:
+    import re
+    return re.search(r"(/\S+\.md)", text).group(1)
+
+
 if __name__ == "__main__":
     unittest.main()

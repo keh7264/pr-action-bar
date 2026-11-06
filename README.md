@@ -108,9 +108,9 @@ claude plugin install review-buttons@pr-action-bar
 
 PR 하나에는 상태가 하나만 붙는다. 아래 순서대로 먼저 맞는 게 붙는다.
 
-남의 PR: Re-review (내 스레드에 상대가 마지막으로 답했다) → Approved → Updated (답은 없고 커밋만 새로 왔다) → Awaiting changes → Approved by others → Reviewing (지금 리뷰 중) → Needs review
+남의 PR: Re-review (내 스레드에 상대가 마지막으로 답했거나, 내가 글을 남긴 뒤 대화 탭에 남이 댓글을 달았다. 내가 승인한 뒤의 댓글은 세지 않는다) → Approved → Updated (답은 없고 커밋만 새로 왔다) → Awaiting changes → Approved by others → Reviewing (지금 리뷰 중) → Needs review
 
-내 PR: Reply → Resolve conflicts → Fix CI → Awaiting re-review → Address changes → Awaiting approval → CI running → Merge, 그리고 Draft. 릴리스 머지 PR은 Resolve conflicts, Fix CI, CI running, Check merge 중 하나다.
+내 PR: Reply (안 닫힌 스레드에 남이 마지막으로 답했거나, 내 마지막 글 뒤 대화 탭에 남이 댓글을 달았다. 승인한 사람이 승인 뒤에 단 댓글은 세지 않는다) → Resolve conflicts → Fix CI → Awaiting re-review → Address changes → Awaiting approval → CI running → Merge, 그리고 Draft. 릴리스 머지 PR은 Resolve conflicts, Fix CI, CI running, Check merge 중 하나다.
 
 PR 번호에 마우스를 올렸을 때 주황색이면 Claude 세션이 열리고, 흰색이면 브라우저가 열린다.
 
@@ -129,7 +129,7 @@ orca repo set --repo path:$HOME/work/app --external-worktree-visibility show
 
 리뷰 탭을 처음 열 때 Claude Code가 이 폴더를 믿을지 한 번 물어본다.
 
-내 리뷰에 답글이 달리면, 열려 있는 리뷰 탭의 입력창이 비어 있을 때만 그 탭에 프롬프트를 넣는다. 뭔가 쓰고 있던 중이면 다음 폴링까지 기다린다. 탭이 없으면 원래 세션을 갈라서(`--fork-session`) 뒤에서 돌린다.
+내 리뷰 스레드나 대화 탭 글에 답글이 달리면(봇 댓글, 내가 승인한 뒤의 댓글은 빼고), 열려 있는 리뷰 탭의 입력창이 비어 있을 때만 그 탭에 프롬프트를 넣는다. 뭔가 쓰고 있던 중이면 다음 폴링까지 기다린다. 탭이 없으면 원래 세션을 갈라서(`--fork-session`) 뒤에서 돌린다.
 
 ## 실패했을 때
 
