@@ -15,6 +15,9 @@ const refreshing = atom({ plugin: 'review-buttons', key: 'refreshing' } as const
 // 클릭 한 번에 Orca CLI 나 git 을 여러 번 부를 수 있다
 const CLICK_TIMEOUT_MS = 60_000
 
+// atom 은 await 뒤에야 읽히니, 빠르게 두 번 눌러도 한 번만 돌게 동기 플래그로 막는다
+let refreshInFlight = false
+
 // 색은 괄호와 상태 이름에만 넣는다. 테마 키라서 라이트 테마에서는 다른 값으로 바뀐다
 const ACTION_COLORS: Record<string, string> = {
   'Resolve conflicts': 'error',
@@ -137,12 +140,14 @@ async function openPr($: EngineInterface, pr: Pr) {
 }
 
 async function refresh($: EngineInterface) {
-  if (await read($, refreshing)) return
-  await update($, refreshing, () => true)
+  if (refreshInFlight) return
+  refreshInFlight = true
   try {
+    await update($, refreshing, () => true)
     await runScript($, ['--refresh', '--full'])
     await tick($)
   } finally {
+    refreshInFlight = false
     await update($, refreshing, () => false)
   }
 }

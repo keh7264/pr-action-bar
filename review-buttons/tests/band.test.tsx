@@ -31,7 +31,7 @@ const BAND = {
 
 type World = {
   files: Record<string, string>; cwd: string; branch: string; runs: string[][]
-  env?: Record<string, string>
+  env?: Record<string, string>; hold?: Promise<void>
 }
 
 function world(on: On, w: World) {
@@ -46,9 +46,10 @@ function world(on: On, w: World) {
   on('fs.exists', (_, e) => ({ value: e.path in w.files }))
   on('fs.read', (_, e) => ({ value: w.files[e.path] ?? '' }))
   on('ui.toast', () => ({ value: undefined }))
-  on('process.run', (_, e) => {
+  on('process.run', async (_, e) => {
     w.runs.push([...e.argv])
     const a = e.argv.join(' ')
+    if (a.includes('--refresh') && w.hold) await w.hold
     const out = a.includes('--git-common-dir') ? '/w/app/.git\n' : a.includes('--show-current') ? `${w.branch}\n` : ''
     return { value: { exitCode: 0, stdout: out, stderr: '' } }
   })
@@ -136,5 +137,17 @@ test('조회에 실패한 레포는 경고를 띄운다', async ($, on) => {
   const ui = await mount($)
   expect(await ui.find({ type: 'Text', text: /조회 실패: app/ })).toBeDefined()
   expect((await ui.find({ key: 'app#7' }))?.text).toBe('app#7')
+  await ui.unmount()
+})
+
+test('↻ 를 빠르게 두 번 눌러도 새로고침은 한 번만 돈다', async ($, on) => {
+  let release = () => {}
+  const hold = new Promise<void>(r => { release = r })
+  const { w } = await setup($, on, { hold })
+  const ui = await mount($)
+  await Promise.all([ui.press({ key: 'refresh' }), ui.press({ key: 'refresh' })])
+  release()
+  await hold
+  expect(w.runs.filter(r => r.includes('--refresh'))).toHaveLength(1)
   await ui.unmount()
 })
