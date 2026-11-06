@@ -442,6 +442,21 @@ class BotFirstReview(ReviewBase):
         self.assertIn("새 지적", text)
         self.assertNotIn("이미 고침", text)
 
+    def test_첫_리뷰가_보류되면_먼저_달린_리뷰를_다음_리뷰에_다시_넣는다(self):
+        self.cfg = self.config(repos={"app": "/repo"}, bot_pr_markers=["[bot-fix]"])
+        self.pr["title"] = "[bot-fix] 로그 정리"
+        self.state["me"] = "me"
+        self.m.review_comments = lambda *a: [rc(5, "alice", "2026-01-01T00:00:00Z", "여기 null", path="a.py", line=3)]
+        self.m.pr_reviews = self.m.issue_comments = lambda *a: []
+        held = self.m.prepare_worktree
+        self.m.prepare_worktree = lambda *a: None
+        self.m.review_pr(self.cfg, self.state, "app", "/repo", self.pr)
+        self.assertNotIn("reply_cursor", self.state["repos"]["app"]["prs"]["1"])
+        self.m.prepare_worktree = held
+        self.m.review_pr(self.cfg, self.state, "app", "/repo", self.pr)
+        self.assertIn("여기 null", Path(re_find_path(self.prompts[1])).read_text())
+        self.assertEqual(self.state["repos"]["app"]["prs"]["1"]["reply_cursor"], 5)
+
     def test_먼저_달린_리뷰가_없으면_그_문장은_없다(self):
         self.cfg = self.config(repos={"app": "/repo"}, bot_pr_markers=["[bot-fix]"])
         self.pr["title"] = "[bot-fix] 로그 정리"

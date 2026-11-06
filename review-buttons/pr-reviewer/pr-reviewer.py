@@ -829,9 +829,8 @@ def review_pr(cfg: dict, state: dict, repo: str, repo_dir: str, pr: dict) -> Non
                         "이 지적도 같은 기준으로 확인해 고칠 것과 안 고칠 것에 넣어라.")
     else:
         cursors = cursors_now(cfg, repo_dir, pr["number"])
-    # 답글 기준점은 리뷰를 시작할 때 잡는다. 리뷰 직후 오간 답글을 본 것으로 넘기지 않게
-    for key, value in cursors.items():
-        ps[key] = max(ps.get(key, 0), value)
+    # 답글 기준점은 리뷰를 시작할 때 값으로 잡되, 리뷰가 끝난 뒤에 저장한다.
+    # 리뷰 중에 달린 답글은 다음 확인에서 보고, 보류 · 실패하면 그 전 피드백도 다음 리뷰에 다시 넣는다
     save_state(state)
     write_status_safely(cfg, state)
 
@@ -855,6 +854,8 @@ def review_pr(cfg: dict, state: dict, repo: str, repo_dir: str, pr: dict) -> Non
     if data is not None:
         write_json(out.with_suffix(".json"), data)
     # 결과를 먼저 저장한다. 알림이나 터미널이 멈춰도 다음 폴링이 처음부터 다시 돌지 않게
+    for key, value in cursors.items():
+        ps[key] = max(ps.get(key, 0), value)
     ps.update(reviewed_at=iso(), session_id=sid, review_file=str(out), reviewed_sha=pr["headRefOid"],
               seconds=seconds, format_ok=data is not None, title=pr["title"])
     ps.pop("reviewing_since", None)
