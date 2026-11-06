@@ -592,6 +592,10 @@ def stay_awake():
     finally:
         if p:
             p.terminate()
+            try:
+                p.wait(timeout=5)  # 좀비로 남지 않게 거둔다
+            except subprocess.TimeoutExpired:
+                p.kill()
 
 
 def claude(cfg: dict, cwd: Path, text: str, *, resume: str | None = None, fork: bool = False,
