@@ -92,7 +92,7 @@ claude plugin install review-buttons@pr-action-bar
 
 `~/.pr-reviewer/prompts/<이름>.md`에 파일을 두면 기본 프롬프트 대신 그걸 쓴다. 이름은 `review`, `recheck`, `recheck_bot`, `summarize`, `summarize_bot`, `reply`다. 팀 리뷰 기준만 덧붙이고 싶으면 `extra-criteria.md`에 적으면 재검토 단계에 들어간다.
 
-프롬프트 안에서는 `{{NUMBER}}`, `{{EFFORT}}`, `{{LANGUAGE}}`, `{{THREAD_FILE}}`, `{{EXTRA_CRITERIA}}`, `{{FORMAT}}`을 쓸 수 있다. `summarize`가 내는 마크다운은 리뷰 탭에서 그대로 읽히고 리뷰 파일 본문이 된다. 지적마다 붙는 `` `경로:줄` · 꼭 수정 `` 줄로 리뷰 파일 머리의 개수를 세니, 바꾸더라도 `{{FORMAT}}`은 남겨 두는 게 좋다.
+프롬프트 안에서는 `{{NUMBER}}`, `{{EFFORT}}`, `{{LANGUAGE}}`, `{{THREAD_FILE}}`, `{{COMMITS}}`, `{{EXTRA_CRITERIA}}`, `{{FORMAT}}`을 쓸 수 있다. `{{COMMITS}}`는 `reply`에서 쓰고, 지난 리뷰 뒤에 올라온 커밋 목록(base 머지 제외)이 들어간다. `summarize`가 내는 마크다운은 리뷰 탭에서 그대로 읽히고 리뷰 파일 본문이 된다. 지적마다 붙는 `` `경로:줄` · 꼭 수정 `` 줄로 리뷰 파일 머리의 개수를 세니, 바꾸더라도 `{{FORMAT}}`은 남겨 두는 게 좋다.
 
 ## 띠 읽는 법
 
@@ -129,7 +129,7 @@ orca repo set --repo path:$HOME/work/app --external-worktree-visibility show
 
 리뷰 탭을 처음 열 때 Claude Code가 이 폴더를 믿을지 한 번 물어본다.
 
-내 리뷰 스레드나 대화 탭 글에 답글이 달리면(봇 댓글, 내가 승인한 뒤의 댓글은 빼고), 열려 있는 리뷰 탭의 입력창이 비어 있을 때만 그 탭에 프롬프트를 넣는다. 뭔가 쓰고 있던 중이면 다음 폴링까지 기다린다. 탭이 없으면 원래 세션을 갈라서(`--fork-session`) 뒤에서 돌린다.
+내 리뷰 스레드나 대화 탭 글에 답글이 달리면(봇 댓글, 내가 승인한 뒤의 댓글은 빼고), 열려 있는 리뷰 탭의 입력창이 비어 있을 때만 그 탭에 프롬프트를 넣는다. 뭔가 쓰고 있던 중이면 다음 폴링까지 기다린다. 탭이 없으면 원래 세션을 갈라서(`--fork-session`) 뒤에서 돌린다. 답글을 볼 때는 리뷰 worktree를 PR의 최신 커밋으로 옮기고, 지난 리뷰 뒤에 올라온 커밋 목록(base 머지 제외)을 프롬프트에 같이 넣는다.
 
 ## 실패했을 때
 

@@ -11,6 +11,7 @@ import importlib.util
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -158,7 +159,11 @@ class ConversationReplies(Base):
         m.terminal_send = lambda *a: False
         m.notify = lambda *a, **k: None
         m.claude = lambda cfg, wt, text, **k: self.calls.append(text) or {"result": "답글 리뷰"}
-        self.pr = {"number": 1, "url": "u", "headRefOid": "a" * 40}
+        self.git_calls, self.git_out = [], ""
+        m.prepare_worktree = lambda cfg, repo, repo_dir, pr, ps: m.worktree_path(repo, pr["number"])
+        m.git = lambda cfg, *args, cwd, **k: (self.git_calls.append(args)
+                                              or subprocess.CompletedProcess(args, 0, self.git_out, ""))
+        self.pr = {"number": 1, "url": "u", "headRefOid": "a" * 40, "baseRefName": "main"}
 
     def run_check(self):
         self.m.check_replies(self.cfg, self.state, "me", "app", "/repo", self.pr)
@@ -195,6 +200,32 @@ class ConversationReplies(Base):
         self.run_check()
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.ps["reply_cursor"], 6)
+
+    def test_답글_리뷰에_이전_리뷰_이후_커밋을_넣는다(self):
+        self.ps["reviewed_sha"] = "b" * 40
+        self.git_out = "- 1234567 fix: null 처리\n"
+        self.issue = [rc(10, "me", "2026-01-01T00:00:00Z"), rc(11, "alice", "2026-01-02T00:00:00Z")]
+        self.run_check()
+        self.assertIn("이후 커밋 (base 머지 제외)", self.calls[0])
+        self.assertIn("1234567 fix: null 처리", self.calls[0])
+        self.assertIn("--no-merges", self.git_calls[0])
+        self.assertIn(f"{'b' * 40}..refs/pr-reviewer/1", self.git_calls[0])
+        self.assertEqual(self.ps["seen_sha"], "a" * 40)
+
+    def test_두_번째_답글부터는_지난_답글_리뷰_뒤의_커밋만(self):
+        self.ps.update(reviewed_sha="b" * 40, seen_sha="c" * 40)
+        self.issue = [rc(10, "me", "2026-01-01T00:00:00Z"), rc(11, "alice", "2026-01-02T00:00:00Z")]
+        self.run_check()
+        self.assertIn(f"{'c' * 40}..refs/pr-reviewer/1", self.git_calls[0])
+        self.assertIn("코드 커밋 없음", self.calls[0])
+
+    def test_worktree_를_못_옮기면_그렇다고_적는다(self):
+        self.ps["reviewed_sha"] = "a" * 40
+        self.m.prepare_worktree = lambda *a: None
+        self.issue = [rc(10, "me", "2026-01-01T00:00:00Z"), rc(11, "alice", "2026-01-02T00:00:00Z")]
+        self.run_check()
+        self.assertIn("새 커밋 없음", self.calls[0])
+        self.assertIn("옮기지 못했다", self.calls[0])
 
 
 def re_find_path(text: str) -> str:
