@@ -384,7 +384,7 @@ def my_login(cfg: dict, state: dict) -> str:
     return state["me"]
 
 
-PR_LIST_FIELDS = "number,title,url,author,isDraft,headRefOid,headRefName,baseRefName,state"
+PR_LIST_FIELDS = "number,title,url,author,isDraft,headRefOid,headRefName,baseRefName,state,updatedAt"
 PR_LIST_LIMIT = 100
 
 
@@ -861,6 +861,7 @@ def review_pr(cfg: dict, state: dict, repo: str, repo_dir: str, pr: dict) -> Non
     ps.pop("reviewing_since", None)
     ps.pop("failures", None)
     ps.pop("gave_up", None)
+    ps.pop("checked_updated_at", None)  # 새 기준점으로 다음 바퀴에 한 번은 확인한다
     ps.pop("seen_sha", None)  # 새 리뷰가 기준이다. 다음 답글의 커밋 목록은 reviewed_sha 부터 센다
     state.get("notified", {}).clear()
     save_state(state)
@@ -957,6 +958,17 @@ def normalize_gql(pr: dict) -> tuple[list[dict], list[dict]]:
             [{"who": login_of(r), "state": r["state"], "at": r.get("submittedAt") or ""} for r in pr["reviews"]["nodes"]])
 
 
+def unchanged_since_check(ps: dict, pr: dict) -> bool:
+    """지난 확인 뒤 PR 이 그대로다. 댓글 · 리뷰가 달리면 PR 의 updatedAt 이 바뀌니 목록을 다시 받을 필요가 없다."""
+    return bool(pr.get("updatedAt")) and ps.get("checked_updated_at") == pr["updatedAt"]
+
+
+def mark_checked(ps: dict, pr: dict) -> None:
+    """답글 · 피드백을 끝까지 확인했다 (미루거나 실패했으면 부르지 않아 다음 바퀴에 다시 본다)."""
+    if pr.get("updatedAt"):
+        ps["checked_updated_at"] = pr["updatedAt"]
+
+
 def check_replies(cfg: dict, state: dict, me: str, repo: str, repo_dir: str, pr: dict) -> None:
     ps = pr_state(state, repo, pr["number"])
     if not ps.get("session_id"):
@@ -987,6 +999,7 @@ def check_replies(cfg: dict, state: dict, me: str, repo: str, repo_dir: str, pr:
         ps["reply_cursor"] = max_id(comments, cursor)
         ps["issue_cursor"] = max_id(issue, icursor)
         ps.pop("reply_failures", None)
+        mark_checked(ps, pr)
 
     if not new and not conv:
         advance()
@@ -1116,6 +1129,7 @@ def check_feedback(cfg: dict, state: dict, me: str, repo: str, repo_dir: str, pr
         ps["issue_cursor"] = max_id(issue, cursors["issue_cursor"])
         ps["review_cursor"] = max_id(reviews, cursors["review_cursor"])
         ps.pop("reply_failures", None)
+        mark_checked(ps, pr)
 
     count = feedback_count(fb)
     if not count:
@@ -1839,6 +1853,8 @@ def poll_pass(cfg: dict, state: dict, me: str, pool: futures.Executor,
                 continue  # 자리가 없으면 다음 바퀴에 리뷰한다
             if not ps.get("session_id"):
                 continue
+            if unchanged_since_check(ps, pr):
+                continue  # 댓글 · 리뷰가 새로 달리지 않았다. 목록 세 개를 받지 않는다
             try:
                 (check_feedback if is_bot_pr(cfg, pr) else check_replies)(cfg, state, me, repo, repo_dir, pr)
                 ps.pop("transient_count", None)

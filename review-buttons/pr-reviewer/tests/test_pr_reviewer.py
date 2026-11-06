@@ -270,6 +270,16 @@ class ConversationReplies(ReplyBase):
         self.assertIn(f"{'c' * 40}..refs/pr-reviewer/1", self.git_calls[0])
         self.assertIn("코드 커밋 없음", self.calls[0])
 
+    def test_끝까지_확인하면_PR_시각을_적고_미루면_적지_않는다(self):
+        self.pr["updatedAt"] = "2026-01-05T00:00:00Z"
+        self.run_check()  # 새 답글 없음
+        self.assertEqual(self.ps["checked_updated_at"], "2026-01-05T00:00:00Z")
+        del self.ps["checked_updated_at"]
+        self.m.terminal_busy = lambda cfg, wt: True
+        self.issue = [rc(10, "me", "2026-01-01T00:00:00Z"), rc(11, "alice", "2026-01-02T00:00:00Z")]
+        self.run_check()  # 미룸: 다음 바퀴에 PR 이 그대로여도 다시 봐야 한다
+        self.assertNotIn("checked_updated_at", self.ps)
+
     def test_리뷰_탭에_쓰던_글이_있으면_git_도_건드리지_않고_미룬다(self):
         self.m.terminal_busy = lambda cfg, wt: True
         fetched = []
@@ -383,11 +393,12 @@ class ReviewFlow(ReviewBase):
 
     def test_다시_리뷰하면_답글_커밋_기준이_새_리뷰로_바뀐다(self):
         ps = self.m.pr_state(self.state, "app", 1)
-        ps.update(reviewed_sha="0" * 40, seen_sha="c" * 40, gave_up="x")
+        ps.update(reviewed_sha="0" * 40, seen_sha="c" * 40, gave_up="x", checked_updated_at="t")
         self.m.review_pr(self.cfg, self.state, "app", "/repo", self.pr)
         self.assertEqual(ps["reviewed_sha"], "a" * 40)
         self.assertNotIn("seen_sha", ps)
         self.assertNotIn("gave_up", ps)
+        self.assertNotIn("checked_updated_at", ps)
 
     def test_형식이_깨지면_알림에_적는다(self):
         self.final = "그냥 글"
@@ -596,6 +607,16 @@ class ParallelReviews(Base):
         threading.Thread(target=lambda: (self.m.poll_locked(self.cfg, self.state), done.set()), daemon=True).start()
         self.assertTrue(done.wait(3), "보류된 PR 을 다시 넣으며 루프가 끝나지 않았다")
         self.assertEqual(calls, [1])
+
+    def test_PR_이_그대로면_답글_목록을_받지_않는다(self):
+        self.prs = [dict(self.prs[1], updatedAt="2026-01-01T00:00:00Z")]
+        ps = {"session_id": "s", "reviewed_at": "x", "checked_updated_at": "2026-01-01T00:00:00Z"}
+        self.state["repos"]["app"]["prs"] = {"2": ps}
+        self.m.poll_locked(self.cfg, self.state)
+        self.assertEqual(self.replies, [])
+        self.prs[0]["updatedAt"] = "2026-01-02T00:00:00Z"  # 댓글이 달려 바뀌었다
+        self.m.poll_locked(self.cfg, self.state)
+        self.assertEqual(self.replies, [2])
 
     def test_같은_레포는_같은_잠금(self):
         self.assertIs(self.m.repo_lock("/a"), self.m.repo_lock("/a"))
