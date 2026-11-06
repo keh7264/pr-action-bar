@@ -13,7 +13,14 @@ launchd 가 poll_minutes(기본 5분)마다 `pr-reviewer.py` 를 실행한다. �
   pr-reviewer.py --open REPO N [--mine]  PR 의 리뷰 세션/작업 탭/PR 페이지 열기
   pr-reviewer.py --orca-sync           리뷰 worktree 의 Orca 이름 · 자리 · 상태를 다시 맞춤
   pr-reviewer.py setup                 묻고 답하며 설정한 뒤 설치
-  pr-reviewer.py install | uninstall | doctor
+  pr-reviewer.py --init --repo 이름=경로 …  설정 파일을 대화 없이 만든다 (/pr-action-bar setup 이 쓴다)
+  pr-reviewer.py install | uninstall | doctor (= preflight)
+  pr-reviewer.py update                이 스크립트로 설치본을 바꾸고 launchd 를 다시 올린다
+  pr-reviewer.py status                설치 · 리뷰 상태 요약
+  pr-reviewer.py --prompts             기본 프롬프트를 prompts/defaults/ 에 꺼내 둔다
+  pr-reviewer.py --notify-test         테스트 알림을 띄우고 알림 권한을 안내한다
+  pr-reviewer.py --terminal            터미널(Orca · Ghostty) 연동 진단
+  pr-reviewer.py --flicker             CLAUDE_CODE_NO_FLICKER=1 을 settings.json 과 .zshrc 에 넣는다
 """
 
 from __future__ import annotations
@@ -1906,6 +1913,209 @@ def orca_sync() -> int:
     return 1 if failed else 0
 
 
+# ───────────────────────── 운영 명령 ─────────────────────────
+# /pr-action-bar 명령(Claude Code 안)이 부른다. 사람에게 묻지 않고 결과만 출력한다.
+
+
+def init_config(repos: list[str], auto_review: bool | None, terminal: str | None) -> int:
+    """설정 파일을 대화 없이 만든다. 있으면 준 값만 바꾼다. repos 는 이름=경로."""
+    ROOT.mkdir(parents=True, exist_ok=True)
+    base = read_json(CONFIG, None)
+    if base is None:
+        base = read_json(Path(__file__).with_name("config.example.json"), dict(DEFAULT_CONFIG))
+        base["repos"] = {}
+    parsed = {}
+    for item in repos:
+        name, sep, path = item.partition("=")
+        name = name.strip()
+        if not sep or not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+            print(f"레포는 이름=경로 로 적는다 (이름은 영문 · 숫자 · - _ .): {item}", file=sys.stderr)
+            return 1
+        top = git_toplevel(str(Path(path.strip()).expanduser()))
+        if not top:
+            print(f"{path} 는 git 저장소가 아니다", file=sys.stderr)
+            return 1
+        parsed[name] = tilde(top)
+    if parsed:
+        base["repos"] = {**base.get("repos", {}), **parsed}
+    if auto_review is not None:
+        base["auto_review"] = auto_review
+    if terminal is not None:
+        if terminal not in TERMINALS:
+            print(f"terminal 은 {' · '.join(TERMINALS)} 중 하나", file=sys.stderr)
+            return 1
+        base["terminal"] = terminal
+    paths = base.setdefault("paths", {})
+    if not paths.get("orca") and Path(ORCA_APP).exists():
+        paths["orca"] = ORCA_APP
+    write_json(CONFIG, base)
+    print(f"{CONFIG} 저장. 레포: {', '.join(f'{k}={v}' for k, v in base.get('repos', {}).items()) or '(없음)'}")
+    return 0
+
+
+def update() -> int:
+    """플러그인을 업데이트한 뒤 부른다. 설정은 그대로 두고 이 스크립트로 설치본과 launchd 를 바꾼다."""
+    if not CONFIG.exists():
+        print("설정이 없다. 먼저 setup 을 한다", file=sys.stderr)
+        return 1
+    before = read_json(STATUS, {}).get("version") or "옛 버전"
+    code = install()
+    if code == 0:
+        print(f"봇 스크립트 {before} → {VERSION}")
+        if load_config()["terminal"] == "orca":
+            orca_sync()
+    return code
+
+
+def launchd_loaded() -> bool:
+    try:
+        return subprocess.run(["/bin/launchctl", "list", LABEL], capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def status_report() -> int:
+    cfg = load_config()
+    state = read_json(STATE, {})
+    status = read_json(STATUS, {})
+    installed = status.get("version") or "옛 버전 (버전 표시 없음)"
+    lines = [
+        f"버전: 이 스크립트 {VERSION} · 설치본 {installed}" + ("" if installed == VERSION else "  → update 필요"),
+        f"설치: launchd {'등록됨' if launchd_loaded() else '없음'} · {cfg['poll_minutes']}분마다 · 설정 {CONFIG}",
+        f"자동 리뷰: {'켜짐' if cfg['auto_review'] else '꺼짐 (띠만)'} · 동시 {cfg['max_parallel_reviews']}개 · "
+        f"터미널 {cfg['terminal']}" + (f" ({cfg['terminal_setting']})" if cfg["terminal_setting"] != cfg["terminal"] else ""),
+        f"레포: {', '.join(cfg['repos']) or '(없음)'}",
+        f"마지막 갱신: {status.get('updated_at') or '없음'}",
+    ]
+    if status.get("failed_repos"):
+        lines.append(f"조회 실패: {', '.join(status['failed_repos'])}")
+    if paused(state):
+        lines.append(f"쉬는 중: {state.get('pause_kind')} — {state.get('paused_until')} 까지")
+    reviewing, gave_up = [], []
+    for repo, rs in state.get("repos", {}).items():
+        for n, ps in rs.get("prs", {}).items():
+            if ps.get("reviewing_since"):
+                reviewing.append(f"{repo}#{n}")
+            if ps.get("gave_up"):
+                gave_up.append(f"{repo}#{n} ({ps.get('last_error', '')[:60]})")
+    if reviewing:
+        lines.append(f"리뷰 중: {', '.join(reviewing)}")
+    if queued():
+        lines.append(f"바로 리뷰 대기: {', '.join(f'{r}#{n}' for r, n in sorted(queued()))}")
+    if gave_up:
+        lines.append("자동 리뷰 멈춤: " + "; ".join(gave_up))
+    log_file = LOGS / "pr-reviewer.log"
+    if log_file.exists():
+        lines.append("최근 로그:")
+        lines += [f"  {line}" for line in log_file.read_text().splitlines()[-5:]]
+    print("\n".join(lines))
+    return 0
+
+
+def export_prompts() -> int:
+    """기본 프롬프트를 prompts/defaults/ 에 꺼낸다. 고치려면 prompts/<이름>.md 로 복사해 쓴다 (덮어쓰지 않는다)."""
+    out = PROMPTS / "defaults"
+    out.mkdir(parents=True, exist_ok=True)
+    for name, text in PROMPT_DEFAULTS.items():
+        write_atomic(out / f"{name}.md", text.strip() + "\n")
+    write_atomic(out / "FORMAT.md", REVIEW_FORMAT + "\n")
+    print(f"기본 프롬프트를 {out} 에 꺼냈다. 바꾸려면 {PROMPTS}/<이름>.md 로 복사해 고친다.")
+    for name in PROMPT_DEFAULTS:
+        mine = PROMPTS / f"{name}.md"
+        print(f"  {name:<14} {'내 파일 사용: ' + str(mine) if mine.exists() else '기본값'}")
+    extra = PROMPTS / "extra-criteria.md"
+    print(f"  {'extra-criteria':<14} {'있음' if extra.exists() else '없음'} ({extra})")
+    return 0
+
+
+NOTIFY_SETTINGS = "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+
+
+def notify_test() -> int:
+    cfg = load_config()
+    tn = find_tool(cfg.get("paths", {}), "terminal-notifier")
+    notify(cfg, {}, "pr-reviewer 테스트 알림", "이 알림이 보이면 알림 설정이 된 것이다", url="https://github.com")
+    print("테스트 알림을 보냈다.")
+    if tn:
+        print(f"- terminal-notifier: {tn}. 알림을 누르면 PR 이 열린다.")
+        print("- 안 보이면: 시스템 설정 → 알림 → terminal-notifier → 알림 허용, 스타일은 '배너'나 '알림'.")
+    else:
+        print("- terminal-notifier 가 없어 맥 기본 알림(스크립트 편집기 이름으로 뜬다)을 썼다. 눌러도 PR 이 열리지 않는다.")
+        print("  `brew install terminal-notifier` 뒤 install 을 다시 돌리면 쓴다.")
+        print("- 안 보이면: 시스템 설정 → 알림 → 스크립트 편집기 → 알림 허용.")
+    print("- 집중 모드(방해 금지)가 켜져 있으면 알림이 숨는다.")
+    print(f"- 알림 설정 열기: open '{NOTIFY_SETTINGS}'")
+    return 0
+
+
+GHOSTTY_VERSION = 'tell application "Ghostty" to get version'
+
+
+def terminal_check() -> int:
+    cfg = load_config()
+    lines = [f"설정 {cfg['terminal_setting']} → 실제 {cfg['terminal']}"]
+    ok = True
+    orca_exe = find_tool(cfg.get("paths", {}), "orca") or (ORCA_APP if Path(ORCA_APP).exists() else None)
+    lines.append(f"Orca CLI: {orca_exe or '없음'}")
+    if cfg["terminal"] == "orca":
+        slow = {**cfg, "terminal_timeout_seconds": 30}
+        if orca(slow, "status") is None:
+            ok = False
+            lines.append("- Orca 에 연결하지 못했다. Orca 를 켜 둔다 (`orca open`)")
+        registered = {str(Path(r["path"]).resolve()): r for r in (orca(slow, "repo", "list") or {}).get("repos", [])
+                      if r.get("path")}
+        for name, d in cfg["repos"].items():
+            path = str(Path(d).resolve())
+            if path not in registered:
+                ok = False
+                lines.append(f"- {name}: Orca 에 등록 안 됨 → `orca repo add --path {path}`")
+            else:
+                lines.append(f"- {name}: Orca 등록됨")
+    app = ghostty_app()
+    lines.append(f"Ghostty: {app or '없음'}")
+    if cfg["terminal"] == "ghostty":
+        version = ghostty(cfg, GHOSTTY_VERSION)
+        if version is None:
+            ok = False
+            lines.append("- Ghostty 를 AppleScript 로 부르지 못했다. 시스템 설정 → 개인정보 보호 및 보안 → 자동화 에서 허용하고,"
+                         " Ghostty 1.3 이상인지 본다 (macos-applescript 설정이 false 면 안 된다)")
+        else:
+            lines.append(f"- Ghostty {version}, AppleScript 됨")
+    if cfg["terminal"] == "none":
+        lines.append("PR 을 누르면 PR 페이지가 열린다 (리뷰 세션 탭으로 가려면 Orca 나 Ghostty)")
+    print("\n".join(lines))
+    return 0 if ok else 1
+
+
+FLICKER_LINE = "export CLAUDE_CODE_NO_FLICKER=1"
+
+
+def flicker(settings: Path | None = None, rc: Path | None = None) -> int:
+    """띠를 마우스로 누르려면 CLAUDE_CODE_NO_FLICKER=1 이 필요하다. Claude Code 설정과 셸 둘 다에 넣는다."""
+    settings = settings or HOME / ".claude/settings.json"
+    rc = rc or HOME / ".zshrc"
+    data = read_json(settings, {})
+    if not isinstance(data, dict):
+        print(f"{settings} 가 JSON 객체가 아니라 건드리지 않았다", file=sys.stderr)
+        return 1
+    env = data.setdefault("env", {})
+    if env.get("CLAUDE_CODE_NO_FLICKER") == "1":
+        print(f"{settings}: 이미 있음")
+    else:
+        env["CLAUDE_CODE_NO_FLICKER"] = "1"
+        write_json(settings, data)
+        print(f"{settings}: env.CLAUDE_CODE_NO_FLICKER=1 넣음")
+    text = rc.read_text() if rc.exists() else ""
+    if re.search(r"^\s*export\s+CLAUDE_CODE_NO_FLICKER=1\b", text, re.M):
+        print(f"{rc}: 이미 있음")
+    else:
+        with open(rc, "a") as f:
+            f.write(("" if not text or text.endswith("\n") else "\n") + f"# pr-action-bar: 띠 클릭\n{FLICKER_LINE}\n")
+        print(f"{rc}: {FLICKER_LINE} 넣음")
+    print("새로 켠 Claude Code 부터 적용된다.")
+    return 0
+
+
 # ───────────────────────── install / doctor ─────────────────────────
 
 
@@ -2214,17 +2424,26 @@ def uninstall() -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", nargs="*", default=["poll"],
-                    help="poll | setup | install | uninstall | doctor | <레포> <PR 번호>")
+                    help="poll | setup | install | update | status | uninstall | doctor | preflight | <레포> <PR 번호>")
     ap.add_argument("--refresh", action="store_true")
     ap.add_argument("--full", action="store_true")
     ap.add_argument("--open", nargs=2, metavar=("REPO", "NUMBER"))
     ap.add_argument("--mine", action="store_true")
     ap.add_argument("--orca-sync", action="store_true", help="리뷰 worktree 의 Orca 이름 · 자리 · 상태를 다시 맞춘다")
+    ap.add_argument("--init", action="store_true", help="설정 파일을 대화 없이 만든다")
+    ap.add_argument("--repo", action="append", default=[], metavar="이름=경로", help="--init 에 넣을 레포 (여러 번)")
+    ap.add_argument("--auto-review", choices=["on", "off"], help="--init: 자동 리뷰를 켤지")
+    ap.add_argument("--terminal-choice", dest="terminal_choice", choices=list(TERMINALS), help="--init: 터미널")
+    ap.add_argument("--prompts", action="store_true", help="기본 프롬프트를 prompts/defaults/ 에 꺼낸다")
+    ap.add_argument("--notify-test", action="store_true", help="테스트 알림")
+    ap.add_argument("--terminal", action="store_true", help="터미널 연동 진단")
+    ap.add_argument("--flicker", action="store_true", help="CLAUDE_CODE_NO_FLICKER=1 을 settings.json · .zshrc 에 넣는다")
     args = ap.parse_args()
     words = args.command
     if len(words) == 2 and words[1].isdigit():
         return review_now(words[0], int(words[1]))
-    if len(words) != 1 or words[0] not in ("poll", "setup", "install", "uninstall", "doctor"):
+    if len(words) != 1 or words[0] not in ("poll", "setup", "install", "update", "status", "uninstall", "doctor",
+                                           "preflight"):
         ap.error(f"모르는 명령: {' '.join(words)}")
     args.command = words[0]
     try:
@@ -2234,13 +2453,28 @@ def main() -> int:
             return open_pr(args.open[0], int(args.open[1]), args.mine)
         if args.orca_sync:
             return orca_sync()
+        if args.init:
+            auto = None if args.auto_review is None else args.auto_review == "on"
+            return init_config(args.repo, auto, args.terminal_choice)
+        if args.prompts:
+            return export_prompts()
+        if args.notify_test:
+            return notify_test()
+        if args.terminal:
+            return terminal_check()
+        if args.flicker:
+            return flicker()
+        if args.command == "update":
+            return update()
+        if args.command == "status":
+            return status_report()
         if args.command == "setup":
             return setup()
         if args.command == "install":
             return install()
         if args.command == "uninstall":
             return uninstall()
-        if args.command == "doctor":
+        if args.command in ("doctor", "preflight"):
             problems = doctor()
             print("\n".join(f"- {p}" for p in problems) or "문제 없음")
             return 1 if problems else 0

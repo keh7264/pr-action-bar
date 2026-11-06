@@ -12,6 +12,9 @@ import json
 import os
 import shutil
 import subprocess
+import contextlib
+import io
+import sys
 import tempfile
 import threading
 import unittest
@@ -656,6 +659,97 @@ class Version(Base):
     def test_스크립트_VERSION_은_플러그인_버전과_같다(self):
         manifest = SCRIPT.parents[1] / ".claude-plugin" / "plugin.json"
         self.assertEqual(self.m.VERSION, json.loads(manifest.read_text())["version"])
+
+
+class Ops(Base):
+    """/pr-action-bar 가 부르는 운영 명령."""
+
+    def out(self, fn, *args) -> tuple[int, str]:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            code = fn(*args)
+        return code, buf.getvalue()
+
+    def git_repo(self, name: str) -> Path:
+        d = self.home / name
+        d.mkdir()
+        subprocess.run(["git", "init", "-q", str(d)], check=True)
+        return d
+
+    def test_init_은_대화_없이_설정을_만들고_합친다(self):
+        a, b = self.git_repo("a"), self.git_repo("b")
+        code, _ = self.out(self.m.init_config, [f"app={a}"], False, "ghostty")
+        self.assertEqual(code, 0)
+        cfg = json.loads(self.m.CONFIG.read_text())
+        self.assertEqual((list(cfg["repos"]), cfg["auto_review"], cfg["terminal"]), (["app"], False, "ghostty"))
+        self.assertEqual(Path(cfg["repos"]["app"]).resolve(), a.resolve())
+        self.out(self.m.init_config, [f"api={b}"], None, None)
+        cfg = json.loads(self.m.CONFIG.read_text())
+        self.assertEqual((sorted(cfg["repos"]), cfg["auto_review"]), (["api", "app"], False))
+
+    def test_init_은_잘못된_값을_거절한다(self):
+        self.assertEqual(self.out(self.m.init_config, ["앱=/tmp"], None, None)[0], 1)
+        self.assertEqual(self.out(self.m.init_config, [f"app={self.home}/nope"], None, None)[0], 1)
+        self.assertEqual(self.out(self.m.init_config, [], None, "iterm")[0], 1)
+        self.assertFalse(self.m.CONFIG.exists())
+
+    def test_flicker_는_두_곳에_한_번만_넣는다(self):
+        settings, rc = self.home / "settings.json", self.home / ".zshrc"
+        settings.write_text('{"model": "opus"}')
+        rc.write_text("alias ll='ls -l'")
+        for _ in range(2):
+            self.assertEqual(self.out(self.m.flicker, settings, rc)[0], 0)
+        self.assertEqual(json.loads(settings.read_text()), {"model": "opus", "env": {"CLAUDE_CODE_NO_FLICKER": "1"}})
+        self.assertEqual(rc.read_text().count(self.m.FLICKER_LINE), 1)
+        self.assertTrue(rc.read_text().startswith("alias ll='ls -l'\n"))
+
+    def test_prompts_는_기본값을_꺼내고_내_파일은_건드리지_않는다(self):
+        self.m.PROMPTS.mkdir(parents=True)
+        (self.m.PROMPTS / "reply.md").write_text("내 답글 프롬프트")
+        code, text = self.out(self.m.export_prompts)
+        self.assertEqual(code, 0)
+        self.assertTrue((self.m.PROMPTS / "defaults" / "summarize.md").exists())
+        self.assertTrue((self.m.PROMPTS / "defaults" / "FORMAT.md").exists())
+        self.assertEqual((self.m.PROMPTS / "reply.md").read_text(), "내 답글 프롬프트")
+        self.assertIn("내 파일 사용", text)
+
+    def test_status_는_버전_차이와_멈춘_PR_을_보여_준다(self):
+        self.config(repos={"app": "/w/app"})
+        self.m.launchd_loaded = lambda: True
+        self.m.write_json(self.m.STATUS, {"version": "0.1.0", "updated_at": "t", "failed_repos": ["app"]})
+        self.m.write_json(self.m.STATE, {"repos": {"app": {"prs": {"3": {"gave_up": "x", "last_error": "boom"}}}}})
+        code, text = self.out(self.m.status_report)
+        self.assertEqual(code, 0)
+        for word in (f"이 스크립트 {self.m.VERSION} · 설치본 0.1.0", "update 필요", "조회 실패: app", "app#3 (boom)"):
+            self.assertIn(word, text)
+
+    def test_update_는_설정이_있어야_하고_설치_뒤_버전을_알린다(self):
+        self.assertEqual(self.out(self.m.update)[0], 1)
+        self.config(repos={})
+        self.m.write_json(self.m.STATUS, {"version": "0.1.0"})
+        self.m.install = lambda: 0
+        code, text = self.out(self.m.update)
+        self.assertEqual(code, 0)
+        self.assertIn(f"0.1.0 → {self.m.VERSION}", text)
+
+    def test_명령줄로_부른다(self):
+        a = self.git_repo("a")
+        argv = sys.argv
+        try:
+            sys.argv = ["pr-reviewer.py", "--init", "--repo", f"app={a}", "--auto-review", "off"]
+            self.assertEqual(self.out(self.m.main)[0], 0)
+            sys.argv = ["pr-reviewer.py", "preflight"]
+            self.m.doctor = lambda: []
+            self.assertEqual(self.out(self.m.main), (0, "문제 없음\n"))
+        finally:
+            sys.argv = argv
+        self.assertFalse(json.loads(self.m.CONFIG.read_text())["auto_review"])
+
+    def test_terminal_진단_none(self):
+        self.config(repos={}, terminal="none")
+        code, text = self.out(self.m.terminal_check)
+        self.assertEqual(code, 0)
+        self.assertIn("PR 페이지가 열린다", text)
 
 
 def re_find_path(text: str) -> str:
