@@ -34,7 +34,42 @@ PR 상태를 Slack 알림 대신 Claude Code 입력창 바로 위에 띄우고, 
 
 ## 설치
 
-### pr-reviewer
+플러그인 하나에 띠와 봇 스크립트가 같이 들어 있다. 플러그인을 깔고 Claude Code 안에서 `/pr-action-bar setup`을 부르면 된다.
+
+```sh
+claude plugin marketplace add keh7264/pr-action-bar
+claude plugin install review-buttons@pr-action-bar
+```
+
+그다음 Claude Code에서:
+
+```text
+/pr-action-bar setup
+```
+
+Claude가 차례로 묻고 대신 설치한다.
+
+1. 리뷰할 레포. Orca에 등록된 레포가 있으면 후보로 보여 준다. 띠에 붙을 짧은 이름도 정한다.
+2. 자동 리뷰를 쓸지. 끄면 mod만 쓴다. 켜면 `/code-review high`(설정의 `effort`, 기본 high)로 리뷰하고, 지적마다 실제로 터지는지 한 번 더 검증한 뒤에 알린다.
+3. PR을 누르면 어느 터미널 탭으로 갈지(`auto`, `orca`, `ghostty`, `none`).
+4. 설정을 쓰고(`--init`) 점검과 launchd 등록(`install`)까지 한다. `terminal-notifier`가 없으면 brew 설치를 권한다.
+5. 테스트 알림(`notify`)과 띠 클릭 설정(`flicker`)을 할지 묻는다.
+
+`/pr-action-bar`의 다른 하위 명령:
+
+| 하위 명령 | 하는 일 |
+|---|---|
+| `update` | 플러그인을 업데이트한 뒤 설치본과 launchd를 새 스크립트로 바꾼다. 띠에 "업데이트 필요"가 뜨면 이걸 부른다 |
+| `status` | 버전, launchd, 리뷰 중 · 멈춘 PR, 최근 로그 요약 |
+| `preflight` | 도구 경로, `gh` 로그인, 레포 접근(VPN), 터미널(Orca · Ghostty) 연동 점검 |
+| `prompts` | 기본 프롬프트를 `~/.pr-reviewer/prompts/defaults/`에 꺼내고, 바꾸고 싶은 것을 같이 고친다 |
+| `notify` | 테스트 알림을 띄우고 macOS 알림 권한 설정을 안내한다 |
+| `flicker` | `CLAUDE_CODE_NO_FLICKER=1`을 `~/.claude/settings.json`과 `~/.zshrc`에 넣는다 |
+| `uninstall` | launchd에서 뺀다 (기록과 worktree는 남는다) |
+
+### 터미널에서 직접 설치하기
+
+레포를 받아 대화형 `setup`을 돌려도 된다. 위와 같은 것을 묻고 설치한다.
 
 ```sh
 git clone https://github.com/keh7264/pr-action-bar.git
@@ -42,30 +77,19 @@ cd pr-action-bar
 python3 pr-reviewer/pr-reviewer.py setup
 ```
 
-`setup`이 차례로 묻는다.
-
-1. 리뷰할 레포. Orca에 등록된 레포가 있으면 번호로 고르고, 없으면 경로를 적는다. 띠에 붙을 짧은 이름도 정한다.
-2. 자동 리뷰를 쓸지. 끄면 mod만 쓴다. 켜면 `/code-review high`(설정의 `effort`, 기본 high)로 리뷰하고, 지적마다 실제로 터지는지 한 번 더 검증한 뒤에 알린다.
-3. PR을 누르면 어느 터미널 탭으로 갈지(`auto`, `orca`, `ghostty`, `none`). Orca면 레포를 Orca에 등록하고 바깥 worktree도 보이게 켜 둔다.
-4. `terminal-notifier`가 없으면 brew로 설치할지. 있어야 알림을 눌러 PR을 연다. 없으면 맥 기본 알림만 뜬다.
-5. 이슈 링크 템플릿과 이슈 프로젝트 키.
-
 다 답하면 `~/.pr-reviewer/config.json`에 저장하고 바로 설치까지 한다. 다시 돌리면 지금 값을 기본값으로 묻는다. 나머지 값(`skip_authors`, `bot_pr_markers` 등)은 그 파일을 직접 고친다. 설정만 고친 뒤에는 `install`로 다시 설치한다.
 
-`install`은 `gh`, `git`, `claude` 같은 도구의 절대 경로를 찾아 설정에 적어 둔다. launchd는 로그인 셸의 PATH를 모르기 때문에, nvm이나 fnm으로 깐 claude를 이렇게 안 해 주면 못 찾는다. 그다음 도구들이 실제로 돌아가는지, `gh`가 로그인돼 있는지, 레포마다 비밀번호 없이 `git ls-remote`가 되는지(VPN이 필요한 회사 레포 때문에) 확인한다. 스크립트는 `~/.pr-reviewer/bin/`에 복사해 두고 launchd는 그 복사본을 돌린다. 플러그인 안의 스크립트와 설치된 복사본의 버전이 다르면 띠에 "봇 스크립트 0.1.0 → 0.2.0 업데이트 필요"가 뜬다. 그러면 새 스크립트로 `install`을 다시 돌린다.
+### 설치가 하는 일
+
+`install`은 `gh`, `git`, `claude` 같은 도구의 절대 경로를 찾아 설정에 적어 둔다. launchd는 로그인 셸의 PATH를 모르기 때문에, nvm이나 fnm으로 깐 claude를 이렇게 안 해 주면 못 찾는다. 그다음 도구들이 실제로 돌아가는지, `gh`가 로그인돼 있는지, 레포마다 비밀번호 없이 `git ls-remote`가 되는지(VPN이 필요한 회사 레포 때문에) 확인한다. 스크립트는 `~/.pr-reviewer/bin/`에 복사해 두고 launchd는 그 복사본을 돌린다. 플러그인 안의 스크립트와 설치된 복사본의 버전이 다르면 띠에 "봇 스크립트 0.1.0 → 0.2.0 업데이트 필요"가 뜬다. 그러면 `/pr-action-bar update`를 부른다.
 
 리뷰는 `max_parallel_reviews`개까지 동시에 돈다. 리뷰가 도는 동안에는 그 폴링 프로세스가 끝나지 않고 `poll_minutes`마다 새 PR과 다른 PR의 답글을 계속 확인한다(launchd는 도는 작업을 겹쳐 띄우지 않기 때문이다). 리뷰가 다 끝나면 프로세스도 끝나고, 다음 폴링은 다시 launchd가 띄운다.
 
 처음 보는 레포에 이미 열려 있던 PR은 리뷰하지 않는다. 설치하자마자 수십 개를 한꺼번에 리뷰하면 사용량이 금방 바닥난다.
 
-### review-buttons
+### 띠 클릭
 
-```sh
-claude plugin marketplace add keh7264/pr-action-bar
-claude plugin install review-buttons@pr-action-bar
-```
-
-띠를 마우스로 누르려면 Claude Code를 `CLAUDE_CODE_NO_FLICKER=1 claude`로 켜야 한다. 그냥 켜면 띠는 보이지만 클릭이 안 되고, 띠에 그렇다고 안내가 뜬다.
+띠를 마우스로 누르려면 Claude Code를 `CLAUDE_CODE_NO_FLICKER=1`로 켜야 한다. 그냥 켜면 띠는 보이지만 클릭이 안 되고, 띠에 그렇다고 안내가 뜬다. `/pr-action-bar flicker`가 이 값을 설정과 셸에 넣어 준다.
 
 ## 설정
 
@@ -163,6 +187,8 @@ worktree에 내가 고치거나 새로 만든 파일(`.DS_Store`는 빼고), 다
 
 ## 명령
 
+보통은 `/pr-action-bar`로 충분하다. 스크립트를 직접 부를 때:
+
 ```sh
 python3 ~/.pr-reviewer/bin/pr-reviewer.py              # 폴링 한 번
 python3 ~/.pr-reviewer/bin/pr-reviewer.py repo-a 1235   # 그 PR을 지금 리뷰 (이미 리뷰했거나 자동 리뷰가 멈췄어도 다시)
@@ -170,7 +196,11 @@ python3 ~/.pr-reviewer/bin/pr-reviewer.py --refresh     # status.json만 바로 
 python3 ~/.pr-reviewer/bin/pr-reviewer.py --open repo-a 1235 [--mine]
 python3 ~/.pr-reviewer/bin/pr-reviewer.py --orca-sync     # 리뷰 worktree의 Orca 이름 · 자리 · In review 상태를 다시 맞춘다
 python3 ~/.pr-reviewer/bin/pr-reviewer.py setup         # 설정을 묻고 답하며 다시 고친다
-python3 ~/.pr-reviewer/bin/pr-reviewer.py doctor        # 설치 상태만 점검
+python3 ~/.pr-reviewer/bin/pr-reviewer.py doctor        # 설치 상태만 점검 (preflight 도 같다)
+python3 ~/.pr-reviewer/bin/pr-reviewer.py status        # 버전 · 리뷰 중 · 멈춘 PR · 최근 로그
+python3 ~/.pr-reviewer/bin/pr-reviewer.py --terminal    # Orca · Ghostty 연동 진단
+python3 ~/.pr-reviewer/bin/pr-reviewer.py --prompts     # 기본 프롬프트를 prompts/defaults/ 에 꺼낸다
+python3 ~/.pr-reviewer/bin/pr-reviewer.py --notify-test # 테스트 알림
 python3 ~/.pr-reviewer/bin/pr-reviewer.py uninstall     # launchd에서 뺀다 (기록과 worktree는 남는다)
 ```
 
