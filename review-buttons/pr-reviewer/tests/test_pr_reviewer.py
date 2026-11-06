@@ -1,6 +1,6 @@
 """pr-reviewer.py 시험. 표준 라이브러리만 쓴다.
 
-    python3 -m unittest discover -s pr-reviewer/tests
+    python3 -m unittest discover -s review-buttons/pr-reviewer/tests
 
 GitHub · git · claude 는 부르지 않는다. 필요한 함수만 바꿔 끼운다.
 """
@@ -650,6 +650,12 @@ class OrcaReplyUnread(ReplyBase):
         self.issue = [rc(10, "me", "2026-01-01T00:00:00Z"), rc(11, "alice", "2026-01-02T00:00:00Z")]
         self.m.check_replies(self.cfg, self.state, "me", "app", "/repo", self.pr)
         self.assertEqual(marks, [self.m.worktree_path("app", 1)])
+
+
+class Version(Base):
+    def test_스크립트_VERSION_은_플러그인_버전과_같다(self):
+        manifest = SCRIPT.parents[1] / ".claude-plugin" / "plugin.json"
+        self.assertEqual(self.m.VERSION, json.loads(manifest.read_text())["version"])
 
 
 def re_find_path(text: str) -> str:

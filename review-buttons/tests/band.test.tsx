@@ -32,6 +32,8 @@ const BAND = {
 type World = {
   files: Record<string, string>; cwd: string; branch: string; runs: string[][]
   env?: Record<string, string>; gitDir?: string; hold?: Promise<void>
+  /** 플러그인 안에 든 봇 스크립트 본문 */
+  bundled?: string
 }
 
 function world(on: On, w: World) {
@@ -44,7 +46,9 @@ function world(on: On, w: World) {
   on('env.get', (_, e) => ({ value: e.name === 'HOME' ? HOME : w.env?.[e.name] }))
   on('session.cwd', () => ({ value: w.cwd }))
   on('fs.exists', (_, e) => ({ value: e.path in w.files }))
-  on('fs.read', (_, e) => ({ value: w.files[e.path] ?? '' }))
+  on('fs.read', (_, e) => ({
+    value: e.path.endsWith('/pr-reviewer/pr-reviewer.py') ? (w.bundled ?? '') : (w.files[e.path] ?? ''),
+  }))
   on('ui.toast', () => ({ value: undefined }))
   on('process.run', async (_, e) => {
     w.runs.push([...e.argv])
@@ -167,5 +171,27 @@ test('같은 브랜치에 PR 이 여럿이면 할 일이 급한 것을 This PR �
   await setup($, on, { files: { [STATUS]: JSON.stringify(json) } })
   const ui = await mount($)
   expect((await ui.find({ key: 'this-action' }))?.text).toBe('[ Fix CI ]')
+  await ui.unmount()
+})
+
+test('설치된 봇 스크립트가 플러그인 안의 것과 버전이 다르면 알린다', async ($, on) => {
+  await setup($, on, {
+    files: { [STATUS]: JSON.stringify({ ...STATUS_JSON, version: '0.1.0' }) },
+    bundled: '#!/usr/bin/env python3\nVERSION = "0.2.0"\n',
+  })
+  const ui = await mount($)
+  expect(await ui.find({ type: 'Text', text: /봇 스크립트 0\.1\.0 → 0\.2\.0 업데이트 필요/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('옛 status.json(버전 없음)도 업데이트를 알리고, 같으면 조용하다', async ($, on) => {
+  const { w, clock } = await setup($, on, { bundled: 'VERSION = "0.2.0"\n' })
+  let ui = await mount($)
+  expect(await ui.find({ type: 'Text', text: /옛 버전 → 0\.2\.0/ })).toBeDefined()
+  await ui.unmount()
+  w.files[STATUS] = JSON.stringify({ ...STATUS_JSON, version: '0.2.0' })
+  await clock.advance(30_000)
+  ui = await mount($)
+  expect(await ui.find({ type: 'Text', text: /업데이트 필요/ })).toBeUndefined()
   await ui.unmount()
 })

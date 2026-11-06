@@ -31,6 +31,8 @@ export type Status = {
   /** 봇 스크립트와 리뷰 worktree 자리 (PR_REVIEWER_HOME 을 따른다). 옛 status.json 에는 없다 */
   script: string | null
   worktrees: string | null
+  /** 설치된 봇 스크립트의 VERSION. 옛 status.json 에는 없다 */
+  version: string | null
 }
 
 declare module 'claude-code' {
@@ -39,6 +41,8 @@ declare module 'claude-code' {
       status: Status
       thisPr: Pr | null
       refreshing: boolean
+      /** 플러그인 안에 든 봇 스크립트의 VERSION (session.start 에 읽는다) */
+      bundled: string | null
     }
   }
 }

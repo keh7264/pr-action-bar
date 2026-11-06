@@ -35,6 +35,9 @@ import time
 from concurrent import futures
 from pathlib import Path
 
+# review-buttons 플러그인의 plugin.json version 과 같게 둔다. 띠가 설치본(status.json)과 플러그인 안의 것을 견준다
+VERSION = "0.2.0"
+
 HOME = Path.home()
 ROOT = Path(os.environ.get("PR_REVIEWER_HOME", HOME / ".pr-reviewer"))
 CONFIG = ROOT / "config.json"
@@ -1578,7 +1581,7 @@ def build_status(cfg: dict, state: dict) -> dict:
             prs.append(entry)
             if action:
                 items.append(entry)
-    status = {"updated_at": iso(), "me": me, "python": cfg.get("paths", {}).get("python3", sys.executable), "items": items, "prs": prs, "git_dirs": git_dirs,
+    status = {"updated_at": iso(), "version": VERSION, "me": me, "python": cfg.get("paths", {}).get("python3", sys.executable), "items": items, "prs": prs, "git_dirs": git_dirs,
               "paused_until": state.get("paused_until") if cfg["auto_review"] and paused(state) else None,
               "errors": errors, "failed_repos": failed,
               # mod 는 PR_REVIEWER_HOME 을 모를 수 있다. 스크립트와 리뷰 worktree 자리를 여기서 알려 준다

@@ -12,9 +12,9 @@ PR 상태를 Slack 알림 대신 Claude Code 입력창 바로 위에 띄우고, 
 
 자세한 이야기는 블로그에 써 뒀다: [Claude Code Mod로 PR 상태 관리하고 리뷰까지 자동화하기](https://keh7264.github.io/blog/claude-code-pr-action-bar/)
 
-두 부분으로 되어 있다.
+두 부분으로 되어 있고, 봇 스크립트는 플러그인 폴더 안에 같이 들어 있다. 그래서 플러그인을 업데이트하면 스크립트도 같이 온다.
 
-- `pr-reviewer/`: launchd로 몇 분마다(기본 5분) 도는 파이썬 스크립트다. 열린 PR 상태를 `~/.pr-reviewer/status.json`에 써 두고, 새 PR이 보이면 PR 전용 worktree에서 헤드리스 Claude Code로 리뷰를 돌린다. 내 리뷰 코멘트에 답글이 달려도 다시 봐 둔다.
+- `review-buttons/pr-reviewer/`(레포 맨 위 `pr-reviewer/`는 같은 폴더를 가리키는 링크): launchd로 몇 분마다(기본 5분) 도는 파이썬 스크립트다. 열린 PR 상태를 `~/.pr-reviewer/status.json`에 써 두고, 새 PR이 보이면 PR 전용 worktree에서 헤드리스 Claude Code로 리뷰를 돌린다. 내 리뷰 코멘트에 답글이 달려도 다시 봐 둔다.
 - `review-buttons/`: 그 파일을 30초마다 읽어서 입력창 위에 띠로 그리는 Claude Code mod(플러그인)다. PR 번호를 누르면 리뷰 세션 탭이나 작업하던 탭, 아니면 PR 페이지로 간다.
 
 리뷰는 PR에 올리지 않는다. 어떤 코멘트를 달지는 내가 정한다. 리뷰 파일에서 복사해 붙이거나, 리뷰 세션 탭에서 같이 보고 "이거 달아 줘"라고 시키면 된다. 그래서 리뷰를 돌릴 때는 읽기 전용 도구만 허용하고, PR에 든 `.claude` 설정과 CLAUDE.md는 읽지 않는다. 리뷰 탭에서 이어 갈 때도 마찬가지다.
@@ -52,7 +52,7 @@ python3 pr-reviewer/pr-reviewer.py setup
 
 다 답하면 `~/.pr-reviewer/config.json`에 저장하고 바로 설치까지 한다. 다시 돌리면 지금 값을 기본값으로 묻는다. 나머지 값(`skip_authors`, `bot_pr_markers` 등)은 그 파일을 직접 고친다. 설정만 고친 뒤에는 `install`로 다시 설치한다.
 
-`install`은 `gh`, `git`, `claude` 같은 도구의 절대 경로를 찾아 설정에 적어 둔다. launchd는 로그인 셸의 PATH를 모르기 때문에, nvm이나 fnm으로 깐 claude를 이렇게 안 해 주면 못 찾는다. 그다음 도구들이 실제로 돌아가는지, `gh`가 로그인돼 있는지, 레포마다 비밀번호 없이 `git ls-remote`가 되는지(VPN이 필요한 회사 레포 때문에) 확인한다. 스크립트는 `~/.pr-reviewer/bin/`에 복사해 두고 launchd는 그 복사본을 돌린다. 그래서 레포를 업데이트하면 `install`을 한 번 더 돌려야 한다.
+`install`은 `gh`, `git`, `claude` 같은 도구의 절대 경로를 찾아 설정에 적어 둔다. launchd는 로그인 셸의 PATH를 모르기 때문에, nvm이나 fnm으로 깐 claude를 이렇게 안 해 주면 못 찾는다. 그다음 도구들이 실제로 돌아가는지, `gh`가 로그인돼 있는지, 레포마다 비밀번호 없이 `git ls-remote`가 되는지(VPN이 필요한 회사 레포 때문에) 확인한다. 스크립트는 `~/.pr-reviewer/bin/`에 복사해 두고 launchd는 그 복사본을 돌린다. 플러그인 안의 스크립트와 설치된 복사본의 버전이 다르면 띠에 "봇 스크립트 0.1.0 → 0.2.0 업데이트 필요"가 뜬다. 그러면 새 스크립트로 `install`을 다시 돌린다.
 
 리뷰는 `max_parallel_reviews`개까지 동시에 돈다. 리뷰가 도는 동안에는 그 폴링 프로세스가 끝나지 않고 `poll_minutes`마다 새 PR과 다른 PR의 답글을 계속 확인한다(launchd는 도는 작업을 겹쳐 띄우지 않기 때문이다). 리뷰가 다 끝나면 프로세스도 끝나고, 다음 폴링은 다시 launchd가 띄운다.
 

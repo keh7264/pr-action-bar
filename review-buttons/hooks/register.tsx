@@ -5,12 +5,13 @@ import type { Pr, Status } from '../types'
 
 const EMPTY: Status = {
   updatedAt: null, items: [], prs: [], gitDirs: {}, pausedUntil: null, python: null,
-  failedRepos: [], script: null, worktrees: null,
+  failedRepos: [], script: null, worktrees: null, version: null,
 }
 
 const status = atom({ plugin: 'review-buttons', key: 'status' } as const, EMPTY)
 const thisPr = atom({ plugin: 'review-buttons', key: 'thisPr' } as const, null)
 const refreshing = atom({ plugin: 'review-buttons', key: 'refreshing' } as const, false)
+const bundled = atom({ plugin: 'review-buttons', key: 'bundled' } as const, null)
 
 // 클릭 한 번에 Orca CLI 나 git 을 여러 번 부를 수 있다
 const CLICK_TIMEOUT_MS = 60_000
@@ -78,6 +79,7 @@ async function loadStatus($: EngineInterface) {
     failedRepos: raw.failed_repos ?? [],
     script: raw.ui?.script ?? null,
     worktrees: raw.ui?.worktrees ?? null,
+    version: raw.version ?? null,
   }
   // 값이 바뀌었을 때만 써서 30초마다 다시 그리지 않는다
   await update($, status, prev => (same(prev, next) ? prev : next))
@@ -118,6 +120,18 @@ async function findThisPr($: EngineInterface): Promise<Pr | null> {
     return pickUrgent(prs.filter(p => p.repo === repo && !p.cross_repo && p.branch === branch.stdout.trim()))
   } catch {
     return null
+  }
+}
+
+// 플러그인 안에 같이 든 봇 스크립트. 설치본(~/.pr-reviewer/bin)과 버전이 다르면 띠에 알린다
+const bundledScript = ($: EngineInterface) => `${$.plugin.root}/pr-reviewer/pr-reviewer.py`
+
+async function loadBundledVersion($: EngineInterface) {
+  try {
+    const m = /^VERSION = "([^"]+)"/m.exec(await $.fs.read(bundledScript($)))
+    await update($, bundled, () => m?.[1] ?? null)
+  } catch {
+    // 플러그인 밖에서 띠만 쓰는 경우 등. 버전 비교를 하지 않는다
   }
 }
 
@@ -185,6 +199,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     // 헤드리스(claude -p) 세션에서는 아무것도 하지 않는다. 리뷰 봇이 띄운 리뷰마다 띠 로직이 돌지 않게
     if (e.isInteractive) {
+      await loadBundledVersion($)
       await tick($)
       $.clock.every(30_000, () => void tick($))
     }
@@ -195,7 +210,8 @@ export const register: Register = on => {
     if (e.props.hasSurvey) return next(e)
 
     const { Box, Button, Text } = $.ui.resolve(e)
-    const { items, updatedAt, pausedUntil, failedRepos } = await read($, status)
+    const { items, updatedAt, pausedUntil, failedRepos, version } = await read($, status)
+    const pluginVersion = await read($, bundled)
     const current = await read($, thisPr)
     const busy = await read($, refreshing)
     // 같은 자리를 쓰는 다른 mod 가 그린 것도 끝에 붙인다
@@ -220,6 +236,9 @@ export const register: Register = on => {
           </Box>
           {pausedUntil ? <Text color="warning">{`리뷰 쉬는 중 (${hhmm(pausedUntil)}까지)`}</Text> : null}
           {failedRepos.length > 0 ? <Text color="warning">{`조회 실패: ${failedRepos.join(', ')}`}</Text> : null}
+          {pluginVersion && updatedAt && version !== pluginVersion ? (
+            <Text color="warning">{`봇 스크립트 ${version ?? '옛 버전'} → ${pluginVersion} 업데이트 필요: /pr-action-bar update`}</Text>
+          ) : null}
           {clickable ? null : <Text dimColor>클릭하려면 CLAUDE_CODE_NO_FLICKER=1 로 실행</Text>}
         </Box>
         {GROUPS.map(g => {
