@@ -14,7 +14,7 @@ PR 상태를 Slack 알림 대신 Claude Code 입력창 바로 위에 띄우고, 
 
 두 부분으로 되어 있다.
 
-- `pr-reviewer/`: launchd로 5분마다 도는 파이썬 스크립트다. 열린 PR 상태를 `~/.pr-reviewer/status.json`에 써 두고, 새 PR이 보이면 PR 전용 worktree에서 헤드리스 Claude Code로 리뷰를 돌린다. 내 리뷰 코멘트에 답글이 달려도 다시 봐 둔다.
+- `pr-reviewer/`: launchd로 몇 분마다(기본 5분) 도는 파이썬 스크립트다. 열린 PR 상태를 `~/.pr-reviewer/status.json`에 써 두고, 새 PR이 보이면 PR 전용 worktree에서 헤드리스 Claude Code로 리뷰를 돌린다. 내 리뷰 코멘트에 답글이 달려도 다시 봐 둔다.
 - `review-buttons/`: 그 파일을 30초마다 읽어서 입력창 위에 띠로 그리는 Claude Code mod(플러그인)다. PR 번호를 누르면 리뷰 세션 탭이나 작업하던 탭, 아니면 PR 페이지로 간다.
 
 리뷰는 PR에 올리지 않는다. 어떤 코멘트를 달지는 내가 정한다. 리뷰 파일에서 복사해 붙이거나, 리뷰 세션 탭에서 같이 보고 "이거 달아 줘"라고 시키면 된다. 그래서 리뷰를 돌릴 때는 읽기 전용 도구만 허용하고, PR에 든 `.claude` 설정과 CLAUDE.md는 읽지 않는다. 리뷰 탭에서 이어 갈 때도 마찬가지다.
@@ -74,6 +74,7 @@ claude plugin install review-buttons@pr-action-bar
 | `auto_review` | `true` | `false`면 mod만 쓴다 |
 | `repos` | `{}` | `{"짧은이름": "로컬 경로"}`. 짧은 이름이 띠에 `repo-a#1234`처럼 붙는다 |
 | `effort` | `high` | `/code-review`에 넘길 레벨 |
+| `poll_minutes` | `5` | 폴링 간격(분). 바꾼 뒤에는 `install`을 다시 돌린다 |
 | `timeout_minutes` | `40` | 리뷰 한 단계에 쓸 수 있는 시간 |
 | `max_attempts` | `2` | 같은 커밋에서 이만큼 실패하면 그 PR은 자동 리뷰를 멈추고 알려 준다 |
 | `skip_authors` | `[]` | 리뷰하지 않을 작성자. 내 PR은 원래 리뷰하지 않는다 |

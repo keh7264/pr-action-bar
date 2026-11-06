@@ -77,5 +77,16 @@ class BotLogins(Base):
         self.assertTrue(self.m.is_bot("renovate[bot]"))
 
 
+class PollMinutes(Base):
+    def test_launchd_간격은_poll_minutes_를_따른다(self):
+        cfg = self.config(repos={}, poll_minutes=10)
+        self.assertIn("<key>StartInterval</key><integer>600</integer>", self.m.plist_text(cfg, "/usr/bin/python3"))
+
+    def test_기본은_5분이고_이상한_값은_기본값(self):
+        self.assertIn("<integer>300</integer>", self.m.plist_text(self.config(repos={}), "py"))
+        self.assertEqual(self.config(repos={}, poll_minutes="x")["poll_minutes"], 5)
+        self.assertEqual(self.config(repos={}, poll_minutes=0)["poll_minutes"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

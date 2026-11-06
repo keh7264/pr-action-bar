@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """pr-reviewer: 열린 PR 을 주기적으로 확인하고 Claude Code 로 미리 리뷰해 두는 폴러.
 
-launchd 가 5분마다 `pr-reviewer.py` 를 실행한다. 한 번 실행되면
+launchd 가 poll_minutes(기본 5분)마다 `pr-reviewer.py` 를 실행한다. 한 번 실행되면
   1. 처음 보는 PR 을 PR 전용 worktree 에서 `claude -p "/code-review"` 로 리뷰하고
   2. 내 코멘트 스레드에 달린 새 답글을 리뷰 세션에 넘기고
   3. GraphQL 로 열린 PR 상태를 받아 status.json 을 쓴다 (review-buttons mod 가 읽는다).
@@ -50,6 +50,8 @@ DEFAULT_CONFIG = {
     # false 면 띠만 쓴다: GitHub 상태만 계산해 status.json 을 쓰고 리뷰·worktree·답글 리뷰는 하지 않는다
     "auto_review": True,
     "effort": "high",
+    # launchd 가 폴링을 띄우는 간격(분). 바꾼 뒤에는 install 을 다시 돌린다
+    "poll_minutes": 5,
     "timeout_minutes": 40,
     # 같은 커밋 max_attempts 회, PR 전체 2*max_attempts 회 실패하면 자동 리뷰를 멈춘다
     "max_attempts": 2,
@@ -223,6 +225,10 @@ def load_config() -> dict:
     # "false" 같은 문자열을 참으로 읽지 않게 한다
     flag = cfg["auto_review"]
     cfg["auto_review"] = flag if isinstance(flag, bool) else str(flag).strip().lower() in ("true", "1", "yes")
+    try:
+        cfg["poll_minutes"] = max(1, int(cfg["poll_minutes"]))
+    except (TypeError, ValueError):
+        cfg["poll_minutes"] = DEFAULT_CONFIG["poll_minutes"]
     _bot_logins.clear()
     _bot_logins.update(normalize_login(n) for n in cfg["bot_logins"] or [])
     return cfg
@@ -1290,13 +1296,18 @@ PLIST_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
   </array>
   <key>EnvironmentVariables</key>
   <dict><key>PR_REVIEWER_HOME</key><string>{root}</string></dict>
-  <key>StartInterval</key><integer>300</integer>
+  <key>StartInterval</key><integer>{interval}</integer>
   <key>RunAtLoad</key><true/>
   <key>StandardOutPath</key><string>{logs}/launchd.out.log</string>
   <key>StandardErrorPath</key><string>{logs}/launchd.err.log</string>
 </dict>
 </plist>
 """
+
+
+def plist_text(cfg: dict, python: str) -> str:
+    return PLIST_TEMPLATE.format(label=LABEL, python=python, script=BIN / "pr-reviewer.py", logs=LOGS, root=ROOT,
+                                 interval=cfg["poll_minutes"] * 60)
 
 
 def install() -> int:
@@ -1336,11 +1347,10 @@ def install() -> int:
             return 1
         PLIST.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(["/bin/launchctl", "unload", str(PLIST)], capture_output=True)
-        write_atomic(PLIST, PLIST_TEMPLATE.format(label=LABEL, python=paths.get("python3", sys.executable),
-                                                  script=target, logs=LOGS, root=ROOT))
+        write_atomic(PLIST, plist_text(cfg, paths.get("python3", sys.executable)))
         LOGS.mkdir(parents=True, exist_ok=True)
         subprocess.run(["/bin/launchctl", "load", str(PLIST)], check=True)
-    print(f"설치 완료. 5분마다 {target} 가 돈다. 로그: {LOGS}/pr-reviewer.log")
+    print(f"설치 완료. {cfg['poll_minutes']}분마다 {target} 가 돈다. 로그: {LOGS}/pr-reviewer.log")
     return 0
 
 

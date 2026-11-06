@@ -5,6 +5,7 @@
   },
   "auto_review": true,
   "effort": "high",
+  "poll_minutes": 5,
   "timeout_minutes": 40,
   "max_attempts": 2,
   "skip_authors": [],
