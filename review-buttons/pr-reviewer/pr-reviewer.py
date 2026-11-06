@@ -1178,6 +1178,11 @@ GHOSTTY_APPS = [Path("/Applications/Ghostty.app"), HOME / "Applications/Ghostty.
 TERMINALS = ("auto", "orca", "ghostty", "none")
 
 
+def orca_exe(cfg: dict) -> str | None:
+    """Orca CLI: 설정 · PATH · Homebrew 자리, 없으면 Orca.app 안의 것."""
+    return find_tool(cfg.get("paths", {}), "orca") or (ORCA_APP if Path(ORCA_APP).exists() else None)
+
+
 def ghostty_app() -> Path | None:
     return next((p for p in GHOSTTY_APPS if p.exists()), None)
 
@@ -1188,7 +1193,7 @@ def resolve_terminal(cfg: dict) -> str:
         return choice
     if choice != "auto":
         log(f"terminal 값 {choice!r} 을 몰라 auto 로 본다")
-    if find_tool(cfg.get("paths", {}), "orca") or Path(ORCA_APP).exists():
+    if orca_exe(cfg):
         return "orca"
     if ghostty_app():
         return "ghostty"
@@ -1204,7 +1209,7 @@ def tcall(cfg: dict, argv: list[str]) -> subprocess.CompletedProcess | None:
 
 
 def orca(cfg: dict, *args: str) -> dict | None:
-    exe = find_tool(cfg.get("paths", {}), "orca") or (ORCA_APP if Path(ORCA_APP).exists() else None)
+    exe = orca_exe(cfg)
     if not exe:
         return None
     p = tcall(cfg, [exe, *args, "--json"])
@@ -2099,8 +2104,7 @@ def terminal_check() -> int:
     cfg = load_config()
     lines = [f"설정 {cfg['terminal_setting']} → 실제 {cfg['terminal']}"]
     ok = True
-    orca_exe = find_tool(cfg.get("paths", {}), "orca") or (ORCA_APP if Path(ORCA_APP).exists() else None)
-    lines.append(f"Orca CLI: {orca_exe or '없음'}")
+    lines.append(f"Orca CLI: {orca_exe(cfg) or '없음'}")
     if cfg["terminal"] == "orca":
         slow = {**cfg, "terminal_timeout_seconds": 30}
         if orca(slow, "status") is None:
