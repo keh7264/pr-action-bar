@@ -913,32 +913,48 @@ def user_of(c: dict) -> str:
     return (c.get("user") or {}).get("login", "")
 
 
-def new_conversation(issue: list[dict], reviews: list[dict], thread_comments: list[dict], me: str,
-                     cursor: int) -> list[dict]:
-    """기준점 뒤 대화 탭에 남(사람)이 단 댓글 중 나에게 하는 답으로 볼 것.
+def conversation_pending(comments: list[dict], reviews: list[dict], me: str, *, author: str, mine: bool,
+                         pushed_at: str = "") -> list[dict]:
+    """대화 탭에서 나에게 온, 아직 답하지 않은 사람 댓글. 띠(GraphQL)와 답글 리뷰(REST)가 같이 쓴다.
 
-    내가 이 PR 에 처음 글을 남긴 뒤의 것만 보고, 내가 승인했으면 승인 뒤 댓글은 뺀다.
+    comments: {"who", "at", "body", "raw"}, reviews: {"who", "state", "at"} (normalize_* 로 맞춘다).
+    - 내 마지막 글(댓글 · 리뷰, 내 PR 이면 마지막 커밋도) 뒤의 댓글만 본다. 봇 명령(/로 시작)은 뺀다.
+    - 남의 PR: 내가 글을 남긴 적이 있어야 하고, PR 작성자의 댓글이거나 @나 를 부른 댓글만 센다.
+      내 마지막 결정이 승인이면 승인 뒤 댓글은 뺀다.
+    - 내 PR: 그 사람의 마지막 결정이 승인이면 승인 뒤 댓글("LGTM" 등)은 뺀다.
     """
-    mine = ([c["created_at"] for c in issue if user_of(c) == me]
-            + [c["created_at"] for c in thread_comments if user_of(c) == me]
-            + [r["submitted_at"] for r in reviews if user_of(r) == me and r.get("submitted_at")])
-    if not mine:
+    my_times = [c["at"] for c in comments if c["who"] == me] + [r["at"] for r in reviews if r["who"] == me and r["at"]]
+    if not my_times and not mine:
         return []
-    first_me = min(mine)
-    decisive = [r for r in reviews if user_of(r) == me and r.get("state") in ("APPROVED", "CHANGES_REQUESTED")]
-    approved_at = decisive[-1].get("submitted_at") if decisive and decisive[-1]["state"] == "APPROVED" else None
-    return [c for c in issue
-            if c["id"] > cursor and user_of(c) != me and not is_bot(user_of(c)) and c["created_at"] > first_me
-            and not (approved_at and c["created_at"] > approved_at)]
+    last_me = max([*my_times, pushed_at or ""])
+    decision: dict[str, tuple[str, str]] = {}
+    for r in sorted((r for r in reviews if r["at"]), key=lambda r: r["at"]):
+        if r["state"] in ("APPROVED", "CHANGES_REQUESTED"):
+            decision[r["who"]] = (r["state"], r["at"])
+    mention = re.compile(rf"@{re.escape(me)}(?![A-Za-z0-9-])", re.I) if me else None
+    out = []
+    for c in comments:
+        who, at, body = c["who"], c["at"], c["body"] or ""
+        if not who or who == me or is_bot(who) or at <= last_me or body.lstrip().startswith("/"):
+            continue
+        if not mine and who != author and not (mention and mention.search(body)):
+            continue
+        approver = who if mine else me
+        state, decided_at = decision.get(approver, ("", ""))
+        if state == "APPROVED" and at >= decided_at:
+            continue
+        out.append(c["raw"])
+    return out
 
 
-_slugs: dict[str, str] = {}
+def normalize_rest(issue: list[dict], reviews: list[dict]) -> tuple[list[dict], list[dict]]:
+    return ([{"who": user_of(c), "at": c["created_at"], "body": c.get("body"), "raw": c} for c in issue],
+            [{"who": user_of(r), "state": r.get("state", ""), "at": r.get("submitted_at") or ""} for r in reviews])
 
 
-def repo_slug_cached(cfg: dict, repo_dir: str) -> str:
-    if repo_dir not in _slugs:
-        _slugs[repo_dir] = repo_slug(cfg, repo_dir)
-    return _slugs[repo_dir]
+def normalize_gql(pr: dict) -> tuple[list[dict], list[dict]]:
+    return ([{"who": login_of(c), "at": c["createdAt"], "body": c.get("body"), "raw": c} for c in pr["comments"]["nodes"]],
+            [{"who": login_of(r), "state": r["state"], "at": r.get("submittedAt") or ""} for r in pr["reviews"]["nodes"]])
 
 
 def check_replies(cfg: dict, state: dict, me: str, repo: str, repo_dir: str, pr: dict) -> None:
@@ -959,7 +975,13 @@ def check_replies(cfg: dict, state: dict, me: str, repo: str, repo_dir: str, pr:
     # 리뷰 목록은 대화 탭에 새 댓글이 있을 때만 받는다
     candidates = [c for c in issue if c["id"] > icursor and user_of(c) != me and not is_bot(user_of(c))]
     reviews = pr_reviews(cfg, repo_dir, pr["number"]) if candidates else []
-    conv = new_conversation(issue, reviews, comments, me, icursor) if candidates else []
+    conv = []
+    if candidates:
+        # 리뷰 스레드에 남긴 내 글도 "내 마지막 글"로 친다
+        mine_threads = [{"who": me, "at": c["created_at"], "body": "", "raw": c} for c in comments if user_of(c) == me]
+        norm_issue, norm_reviews = normalize_rest(issue, reviews)
+        pending = conversation_pending(norm_issue + mine_threads, norm_reviews, me, author=author_of(pr), mine=False)
+        conv = [c for c in pending if c["id"] > icursor]
 
     def advance() -> None:
         ps["reply_cursor"] = max_id(comments, cursor)
@@ -1356,9 +1378,9 @@ query($owner: String!, $name: String!) {
       nodes {
         number title url isDraft headRefOid headRefName isCrossRepository author { login } reviewDecision mergeable
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
-        recent: commits(last: 30) { nodes { commit { oid parents(first: 2) { totalCount } } } }
+        recent: commits(last: 30) { nodes { commit { oid committedDate parents(first: 2) { totalCount } } } }
         reviews(last: 50) { nodes { author { login } state submittedAt commit { oid } } }
-        comments(last: 50) { nodes { author { login } createdAt } }
+        comments(last: 50) { nodes { author { login } createdAt body } }
         reviewThreads(first: 50) {
           nodes {
             isResolved
@@ -1381,40 +1403,9 @@ def login_of(node: dict) -> str | None:
     return (node.get("author") or {}).get("login")
 
 
-def conversation_replies(pr: dict, me: str, my_comments: list | None = None, my_reviews: list | None = None,
-                         approved_skip: bool = False) -> list[dict]:
-    """대화 탭에서 내 마지막 글 뒤에 남(사람)이 단 댓글.
-
-    남의 PR 에서는 내가 리뷰나 댓글을 남긴 적이 있어야 센다. 내 PR(approved_skip)에서는 승인한 사람이
-    승인 뒤에 단 댓글("LGTM" 등)은 뺀다.
-    """
-    comments = pr["comments"]["nodes"]
-    reviews = pr["reviews"]["nodes"]
-    if my_comments is None:
-        my_comments = [c for c in comments if login_of(c) == me]
-    if my_reviews is None:
-        my_reviews = [r for r in reviews if login_of(r) == me]
-    my_times = [c["createdAt"] for c in my_comments] + [r["submittedAt"] for r in my_reviews if r.get("submittedAt")]
-    if not my_times and not approved_skip:
-        return []
-    last_me = max(my_times, default="")
-    approved_at: dict[str, str] = {}
-    if approved_skip:
-        # 사람마다 마지막 결정(승인 · 변경 요청)이 승인일 때만 그 승인 뒤 댓글을 뺀다
-        for r in sorted((r for r in reviews if r.get("submittedAt")), key=lambda r: r["submittedAt"]):
-            if r["state"] == "APPROVED":
-                approved_at[login_of(r)] = r["submittedAt"]
-            elif r["state"] == "CHANGES_REQUESTED":
-                approved_at.pop(login_of(r), None)
-    out = []
-    for c in comments:
-        who = login_of(c)
-        if not who or who == me or is_bot(who) or c["createdAt"] <= last_me:
-            continue
-        if who in approved_at and c["createdAt"] >= approved_at[who]:
-            continue
-        out.append(c)
-    return out
+def last_commit_at(pr: dict) -> str:
+    """PR 의 마지막 커밋 시각. 내 PR 에서 댓글 뒤에 커밋을 올렸으면 답한 것으로 본다."""
+    return max((n["commit"].get("committedDate") or "" for n in pr["recent"]["nodes"]), default="")
 
 
 def team_action(pr: dict, me: str, ps: dict, repo_seen: bool = True) -> str:
@@ -1431,7 +1422,7 @@ def team_action(pr: dict, me: str, ps: dict, repo_seen: bool = True) -> str:
     if decisive and decisive[-1]["state"] == "APPROVED":
         return "Approved"  # 승인한 뒤 대화 탭에 달린 댓글은 나에게 하는 답이 아니다
     my_comments = [c for c in pr["comments"]["nodes"] if (c.get("author") or {}).get("login") == me]
-    if conversation_replies(pr, me, my_comments, mine):
+    if conversation_pending(*normalize_gql(pr), me, author=author_of(pr), mine=False):
         return "Re-review"
     if mine or my_comments:
         reviewed_oid = next((r["commit"]["oid"] for r in reversed(mine) if r.get("commit")), None)
@@ -1469,7 +1460,8 @@ def my_action(pr: dict, me: str, release: bool) -> str:
     last_authors = [((t["last"]["nodes"] or [{}])[0].get("author") or {}).get("login") for t in unresolved]
     ci = check_state(pr)
     if not release and (any(a and a != me and not is_bot(a) for a in last_authors)
-                        or conversation_replies(pr, me, approved_skip=True)):
+                        or conversation_pending(*normalize_gql(pr), me, author=me, mine=True,
+                                                pushed_at=last_commit_at(pr))):
         return "Reply"
     if pr["mergeable"] == "CONFLICTING":
         return "Resolve conflicts"

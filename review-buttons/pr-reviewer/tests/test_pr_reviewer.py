@@ -96,9 +96,9 @@ class PollMinutes(Base):
         self.assertEqual(self.config(repos={}, poll_minutes=0)["poll_minutes"], 1)
 
 
-def gc(login: str, at: str) -> dict:
+def gc(login: str, at: str, body: str = "...") -> dict:
     """GraphQL 대화 탭 댓글."""
-    return {"author": {"login": login}, "createdAt": at}
+    return {"author": {"login": login}, "createdAt": at, "body": body}
 
 
 def gr(login: str, state: str, at: str) -> dict:
@@ -143,6 +143,27 @@ class ConversationStatus(Base):
                     comments={"nodes": [gc("bob", "2026-01-03T00:00:00Z")]})
         self.assertEqual(self.m.my_action(pr, "me", False), "Reply")
 
+    def test_남의_PR_에서_제3자의_LGTM_은_나에게_온_답이_아니다(self):
+        pr = gql_pr(comments={"nodes": [gc("me", "2026-01-01T00:00:00Z"), gc("carol", "2026-01-02T00:00:00Z", "LGTM")]})
+        self.assertNotEqual(self.m.team_action(pr, "me", {}, False), "Re-review")
+
+    def test_제3자라도_나를_부르면_답이다(self):
+        pr = gql_pr(comments={"nodes": [gc("me", "2026-01-01T00:00:00Z"),
+                                        gc("carol", "2026-01-02T00:00:00Z", "@me 이건 제가 답할게요")]})
+        self.assertEqual(self.m.team_action(pr, "me", {}, False), "Re-review")
+        pr["comments"]["nodes"][1]["body"] = "@meow 확인"
+        self.assertNotEqual(self.m.team_action(pr, "me", {}, False), "Re-review")
+
+    def test_내_PR_에서_댓글_뒤에_커밋을_올렸으면_답한_것이다(self):
+        pr = gql_pr(author={"login": "me"}, comments={"nodes": [gc("bob", "2026-01-02T00:00:00Z", "FYI")]},
+                    recent={"nodes": [{"commit": {"oid": "a" * 40, "committedDate": "2026-01-03T00:00:00Z",
+                                                  "parents": {"totalCount": 1}}}]})
+        self.assertNotEqual(self.m.my_action(pr, "me", False), "Reply")
+
+    def test_내_PR_의_봇_명령_댓글은_Reply_가_아니다(self):
+        pr = gql_pr(author={"login": "me"}, comments={"nodes": [gc("bob", "2026-01-02T00:00:00Z", "/deploy staging")]})
+        self.assertNotEqual(self.m.my_action(pr, "me", False), "Reply")
+
     def test_내가_답한_뒤에는_Reply_가_아니다(self):
         pr = gql_pr(author={"login": "me"}, comments={"nodes": [gc("bob", "2026-01-02T00:00:00Z"),
                                                                  gc("me", "2026-01-03T00:00:00Z")]})
@@ -176,7 +197,8 @@ class ReplyBase(Base):
         m.prepare_worktree = lambda cfg, repo, repo_dir, pr, ps: m.worktree_path(repo, pr["number"])
         m.git = lambda cfg, *args, cwd, **k: (self.git_calls.append(args)
                                               or subprocess.CompletedProcess(args, 0, self.git_out, ""))
-        self.pr = {"number": 1, "url": "u", "headRefOid": "a" * 40, "baseRefName": "main"}
+        self.pr = {"number": 1, "url": "u", "headRefOid": "a" * 40, "baseRefName": "main",
+                   "author": {"login": "alice"}}
 
 
 class ConversationReplies(ReplyBase):
@@ -203,6 +225,18 @@ class ConversationReplies(ReplyBase):
         self.run_check()
         self.assertEqual(self.calls, [])
         self.assertEqual(self.ps["issue_cursor"], 12)
+
+    def test_제3자의_대화는_넘기지_않는다(self):
+        self.issue = [rc(10, "me", "2026-01-01T00:00:00Z", "확인 부탁"), rc(11, "carol", "2026-01-02T00:00:00Z", "LGTM")]
+        self.run_check()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.ps["issue_cursor"], 11)
+
+    def test_내가_이미_답한_대화는_넘기지_않는다(self):
+        self.issue = [rc(10, "me", "2026-01-01T00:00:00Z"), rc(11, "alice", "2026-01-02T00:00:00Z"),
+                      rc(12, "me", "2026-01-03T00:00:00Z", "네 확인했어요")]
+        self.run_check()
+        self.assertEqual(self.calls, [])
 
     def test_예전_상태에는_대화_기준점을_지금으로_잡는다(self):
         del self.ps["issue_cursor"]
