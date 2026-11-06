@@ -1730,6 +1730,7 @@ def poll_locked(cfg: dict, state: dict) -> None:
     pool = futures.ThreadPoolExecutor(max_workers=cfg["max_parallel_reviews"], thread_name_prefix="review")
     try:
         last_pass = 0.0
+        seen_requests: set[tuple[str, int]] = set()  # 지난 바퀴가 이미 본 바로 리뷰 요청
         while True:
             finished = [k for k, f in running.items() if f.done()]
             for k in finished:
@@ -1737,9 +1738,12 @@ def poll_locked(cfg: dict, state: dict) -> None:
                 err = running.pop(k).exception()
                 if err:  # review_worker 가 다 받아 내지만, 상태 저장 실패 같은 것은 로그로 남긴다
                     log(f"{k[0]}#{k[1]} 리뷰 스레드 오류: {short_error(err)}")
-            waiting = [k for k in queued() if k not in running]
+            waiting = {k for k in queued() if k not in running}
             room = len(running) < cfg["max_parallel_reviews"]
-            if finished or time.time() - last_pass >= cfg["poll_minutes"] * 60 or (waiting and room):
+            # 새로 들어온 요청만 바로 돈다. 못 가져간 요청(레포 조회 실패, 쉬는 중)은 정규 바퀴에 다시 본다
+            fresh = bool(waiting - seen_requests) and room
+            if finished or time.time() - last_pass >= cfg["poll_minutes"] * 60 or fresh:
+                seen_requests = waiting
                 poll_pass(cfg, state, me, pool, running, finished_at)
                 save_state(state)
                 write_status_safely(cfg, state)

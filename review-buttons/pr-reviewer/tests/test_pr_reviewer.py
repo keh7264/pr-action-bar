@@ -588,6 +588,27 @@ class ReviewNow(ParallelReviews):
         self.assertEqual(prs["1"]["reviewed_at"], "done")
         self.assertNotIn("reviewed_at", prs["2"])
 
+    def test_가져가지_못한_요청으로_바퀴를_계속_돌지_않는다(self):
+        other = self.home / "other"
+        other.mkdir()
+        self.cfg["repos"]["other"] = str(other)
+        self.cfg["poll_minutes"] = 60
+        self.state["repos"]["other"] = {"seen_initial": "x"}
+        passes = []
+        real_pass = self.m.poll_pass
+        self.m.poll_pass = lambda *a: (passes.append(1), real_pass(*a))
+
+        def listing(cfg, repo_dir):  # other 레포는 VPN 이 끊겨 조회가 늘 실패한다
+            if repo_dir == str(other):
+                raise self.m.Failed("vpn")
+            return self.prs[:1]
+        self.m.list_open_prs = listing
+        self.ask("other", 5)
+        self.hold = lambda pr: threading.Event().wait(0.3)  # 그동안 WAKE(0.02초)가 여러 번 돈다
+        self.m.poll_locked(self.cfg, self.state)
+        self.assertEqual(len(passes), 2)  # 첫 바퀴 + 리뷰가 끝난 뒤 한 바퀴
+        self.assertEqual(self.m.queued(), {("other", 5)})  # 요청은 다음 정규 바퀴를 위해 남는다
+
     def test_명령은_큐에_넣고_launchd_가_없으면_바로_돈다(self):
         ran = []
         self.m.poll = lambda: ran.append(sorted(self.m.queued())) or 0
