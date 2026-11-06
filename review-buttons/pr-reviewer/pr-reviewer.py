@@ -241,6 +241,16 @@ def read_json(path: Path, default):
         return default
 
 
+def read_json_strict(path: Path, default):
+    """없으면 default, 깨졌으면 None. 사용자 파일을 고치기 전에 깨진 파일을 덮어쓰지 않으려고 쓴다."""
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return default
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+
+
 def write_atomic(path: Path, text: str) -> None:
     """임시 파일에 쓴 뒤 바꿔 넣는다. 프로세스마다 임시 이름이 달라 동시에 써도 섞이지 않는다."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1927,8 +1937,11 @@ def orca_sync() -> int:
 def init_config(repos: list[str], auto_review: bool | None, terminal: str | None) -> int:
     """설정 파일을 대화 없이 만든다. 있으면 준 값만 바꾼다. repos 는 이름=경로."""
     ROOT.mkdir(parents=True, exist_ok=True)
-    base = read_json(CONFIG, None)
-    if base is None:
+    base = read_json_strict(CONFIG, {})
+    if not isinstance(base, dict):
+        print(f"{CONFIG} 가 깨져 있어 건드리지 않았다. 고친 뒤 다시 한다", file=sys.stderr)
+        return 1
+    if not base:
         base = read_json(Path(__file__).with_name("config.example.json"), dict(DEFAULT_CONFIG))
         base["repos"] = {}
     parsed = {}
@@ -2101,9 +2114,10 @@ def flicker(settings: Path | None = None, rc: Path | None = None) -> int:
     """띠를 마우스로 누르려면 CLAUDE_CODE_NO_FLICKER=1 이 필요하다. Claude Code 설정과 셸 둘 다에 넣는다."""
     settings = settings or HOME / ".claude/settings.json"
     rc = rc or HOME / ".zshrc"
-    data = read_json(settings, {})
+    data = read_json_strict(settings, {})
     if not isinstance(data, dict):
-        print(f"{settings} 가 JSON 객체가 아니라 건드리지 않았다", file=sys.stderr)
+        # 깨진 settings.json 을 덮어쓰면 권한 · 훅 설정이 다 날아간다
+        print(f"{settings} 가 깨졌거나 JSON 객체가 아니라 건드리지 않았다. 고친 뒤 다시 한다", file=sys.stderr)
         return 1
     env = data.setdefault("env", {})
     if env.get("CLAUDE_CODE_NO_FLICKER") == "1":

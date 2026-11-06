@@ -713,6 +713,19 @@ class Ops(Base):
         self.assertEqual(rc.read_text().count(self.m.FLICKER_LINE), 1)
         self.assertTrue(rc.read_text().startswith("alias ll='ls -l'\n"))
 
+    def test_깨진_settings_json_은_덮어쓰지_않는다(self):
+        settings, rc = self.home / "settings.json", self.home / ".zshrc"
+        settings.write_text('{"permissions": {"allow": ["Bash"]},}')
+        self.assertEqual(self.out(self.m.flicker, settings, rc)[0], 1)
+        self.assertEqual(settings.read_text(), '{"permissions": {"allow": ["Bash"]},}')
+        self.assertFalse(rc.exists())
+
+    def test_깨진_config_json_은_init_이_덮어쓰지_않는다(self):
+        self.m.ROOT.mkdir(parents=True, exist_ok=True)
+        self.m.CONFIG.write_text('{"repos": {"app": "~/w/app"},')
+        self.assertEqual(self.out(self.m.init_config, [], False, None)[0], 1)
+        self.assertEqual(self.m.CONFIG.read_text(), '{"repos": {"app": "~/w/app"},')
+
     def test_prompts_는_기본값을_꺼내고_내_파일은_건드리지_않는다(self):
         self.m.PROMPTS.mkdir(parents=True)
         (self.m.PROMPTS / "reply.md").write_text("내 답글 프롬프트")
