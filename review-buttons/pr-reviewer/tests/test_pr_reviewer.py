@@ -320,35 +320,43 @@ REVIEW_JSON = {
 }
 
 
+REVIEW_MD = """## PR 요약
+
+결제 완료 문구를 바꾼다. null 처리가 빠졌다.
+
+---
+
+### 1. null 이면 터진다
+
+`b.ts:10` · 꼭 수정
+"""
+
+
 class ReviewFormat(Base):
     pr = {"number": 1, "title": "feat: x", "url": "u", "headRefOid": "a" * 40}
 
-    def render(self, raw: str):
-        return self.m.render_review(self.config(repos={}), "app", self.pr, raw, "sid", Path("/wt"), 65)
+    def render(self, data):
+        return self.m.render_review(self.config(repos={}), "app", self.pr, REVIEW_MD, data, "sid", Path("/wt"), 65)
 
-    def test_JSON_을_마크다운으로_그리고_분류를_센다(self):
-        text, data = self.render(json.dumps(REVIEW_JSON, ensure_ascii=False))
-        self.assertIsNotNone(data)
+    def test_본문은_정리_마크다운_그대로_개수는_JSON_으로_센다(self):
+        text = self.render(REVIEW_JSON)
         self.assertIn("꼭 1 · 넘겨도 1", text)
-        self.assertLess(text.index("null 이면 터진다"), text.index("문구 오타"))  # 꼭 수정이 먼저
-        self.assertIn("`b.ts:10` · 꼭 수정", text)
-        self.assertIn("```diff\n- a.b\n+ a?.b\n```", text)
+        self.assertIn(REVIEW_MD.strip(), text)
+        self.assertNotIn('"findings"', text)
 
     def test_코드블록이나_앞뒤_말이_붙어도_읽는다(self):
         body = json.dumps(REVIEW_JSON, ensure_ascii=False)
         for raw in (f"```json\n{body}\n```", f"정리했습니다.\n{body}\n끝"):
             self.assertIsNotNone(self.m.parse_review(raw), raw[:20])
+        self.assertIsNone(self.m.parse_review(REVIEW_MD))
 
     def test_지적이_없으면_지적_없음(self):
-        text, data = self.render('{"pr_summary": "괜찮다", "findings": []}')
-        self.assertIn("· 지적 없음", text)
+        self.assertIn("· 지적 없음", self.render({"pr_summary": "괜찮다", "findings": []}))
 
-    def test_형식이_깨지면_원문을_보존하고_형식_확인_필요(self):
-        raw = "## PR 요약\n\n마크다운으로 답해 버렸다"
-        text, data = self.render(raw)
-        self.assertIsNone(data)
+    def test_JSON_이_없으면_정리는_그대로_두고_형식_확인_필요(self):
+        text = self.render(None)
         self.assertIn("형식 확인 필요", text)
-        self.assertIn("마크다운으로 답해 버렸다", text)
+        self.assertIn(REVIEW_MD.strip(), text)
 
     def test_모르는_분류는_따로_센다(self):
         bad = {"pr_summary": "s", "findings": [{"title": "t", "category": "중요"}]}
@@ -359,7 +367,7 @@ class ReviewBase(Base):
     def setUp(self):
         super().setUp()
         self.cfg = self.config(repos={"app": "/repo"})
-        self.state, self.prompts, self.notes = {}, [], []
+        self.state, self.prompts, self.notes, self.forks = {}, [], [], []
         m = self.m
         self.pr = {"number": 1, "title": "feat: x", "url": "u", "headRefOid": "a" * 40, "baseRefName": "main",
                    "state": "OPEN", "isDraft": False, "author": {"login": "alice"}}
@@ -369,24 +377,29 @@ class ReviewBase(Base):
         m.write_status_safely = lambda *a: None
         m.terminal_prepare = lambda *a, **k: None
         m.notify = lambda cfg, state, title, msg, **k: self.notes.append(title)
-        self.final = json.dumps(REVIEW_JSON, ensure_ascii=False)
+        self.json_answer = json.dumps(REVIEW_JSON, ensure_ascii=False)
 
         def fake_claude(cfg, wt, text, **k):
             self.prompts.append(text)
-            return {"session_id": "sid", "result": self.final if len(self.prompts) == 3 else "..."}
+            if k.get("fork"):
+                self.forks.append(len(self.prompts))
+                return {"session_id": "fork", "result": self.json_answer}
+            return {"session_id": "sid", "result": REVIEW_MD if len(self.prompts) == 3 else "..."}
         m.claude = fake_claude
 
 
 class ReviewFlow(ReviewBase):
-    """review_pr 한 바퀴: 리뷰 → 재검토 → 정리, 리뷰 파일 · JSON · 알림."""
+    """review_pr 한 바퀴: 리뷰 → 재검토 → 정리(마크다운) → 갈라진 세션에서 JSON, 리뷰 파일 · 알림."""
 
-    def test_리뷰_파일과_JSON_을_쓰고_알린다(self):
+    def test_정리는_마크다운으로_JSON_은_갈라진_세션에서(self):
         self.m.review_pr(self.cfg, self.state, "app", "/repo", self.pr)
         ps = self.state["repos"]["app"]["prs"]["1"]
-        self.assertEqual(len(self.prompts), 3)
+        self.assertEqual(len(self.prompts), 4)
         self.assertTrue(self.prompts[0].startswith("/code-review 1 high"))
-        self.assertIn("JSON", self.prompts[2])
-        self.assertTrue(Path(ps["review_file"]).exists())
+        self.assertIn("마크다운", self.prompts[2])  # 리뷰 탭의 마지막 답은 읽기 좋은 정리
+        self.assertEqual(self.forks, [4])  # JSON 은 원래 세션에 남지 않게 갈라서
+        self.assertEqual(ps["session_id"], "sid")
+        self.assertIn(REVIEW_MD.strip(), Path(ps["review_file"]).read_text())
         self.assertTrue(Path(ps["review_file"]).with_suffix(".json").exists())
         self.assertEqual((ps["reply_cursor"], ps["issue_cursor"], ps["format_ok"]), (5, 7, True))
         self.assertEqual(self.notes, ["app#1 리뷰 완료"])
@@ -400,11 +413,24 @@ class ReviewFlow(ReviewBase):
         self.assertNotIn("gave_up", ps)
         self.assertNotIn("checked_updated_at", ps)
 
-    def test_형식이_깨지면_알림에_적는다(self):
-        self.final = "그냥 글"
+    def test_JSON_이_깨지면_리뷰는_끝내고_알림에_적는다(self):
+        self.json_answer = "그냥 글"
+        self.m.review_pr(self.cfg, self.state, "app", "/repo", self.pr)
+        ps = self.state["repos"]["app"]["prs"]["1"]
+        self.assertEqual(self.notes, ["app#1 리뷰 완료 (형식 확인 필요)"])
+        self.assertFalse(ps["format_ok"])
+        self.assertTrue(ps["reviewed_at"])
+
+    def test_JSON_변환_호출이_실패해도_리뷰는_끝난다(self):
+        real = self.m.claude
+
+        def failing(cfg, wt, text, **k):
+            if k.get("fork"):
+                raise self.m.Failed("claude 오류")
+            return real(cfg, wt, text, **k)
+        self.m.claude = failing
         self.m.review_pr(self.cfg, self.state, "app", "/repo", self.pr)
         self.assertEqual(self.notes, ["app#1 리뷰 완료 (형식 확인 필요)"])
-        self.assertFalse(self.state["repos"]["app"]["prs"]["1"]["format_ok"])
 
 
 class SystemPrompt(Base):
