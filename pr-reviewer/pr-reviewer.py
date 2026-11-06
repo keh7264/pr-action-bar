@@ -54,6 +54,8 @@ DEFAULT_CONFIG = {
     # 같은 커밋 max_attempts 회, PR 전체 2*max_attempts 회 실패하면 자동 리뷰를 멈춘다
     "max_attempts": 2,
     "skip_authors": [],
+    # 사람 답글로 치지 않을 계정 (사내 리뷰 봇 등). [bot] 으로 끝나는 계정과 잘 알려진 봇은 원래 뺀다
+    "bot_logins": [],
     # 내가 만든 봇이 연 PR 의 제목 표시. 이 PR 은 My PR 로 보고 "수정 지시" 형태로 리뷰한다
     "bot_pr_markers": [],
     # CI 봇이 여는 릴리스 머지 PR (자동 리뷰 안 함, My PR 로 막힌 이유만 띄운다)
@@ -221,6 +223,8 @@ def load_config() -> dict:
     # "false" 같은 문자열을 참으로 읽지 않게 한다
     flag = cfg["auto_review"]
     cfg["auto_review"] = flag if isinstance(flag, bool) else str(flag).strip().lower() in ("true", "1", "yes")
+    _bot_logins.clear()
+    _bot_logins.update(normalize_login(n) for n in cfg["bot_logins"] or [])
     return cfg
 
 
@@ -333,9 +337,18 @@ def view_pr(cfg: dict, repo_dir: str, number: int) -> dict:
     return gh_json(cfg, ["pr", "view", str(number), "--json", PR_LIST_FIELDS], cwd=repo_dir)
 
 
+KNOWN_BOTS = {"github-actions", "dependabot", "renovate", "coderabbitai"}
+_bot_logins: set[str] = set()  # 설정의 bot_logins (load_config 가 채운다)
+
+
+def normalize_login(login: str | None) -> str:
+    # gh pr list 는 봇을 app/<이름> 으로 준다
+    return (login or "").strip().lower().removeprefix("app/")
+
+
 def is_bot(login: str | None) -> bool:
-    login = (login or "").lower()
-    return login.endswith("[bot]") or login in {"github-actions", "dependabot", "renovate", "coderabbitai"}
+    login = normalize_login(login)
+    return login.endswith("[bot]") or login in KNOWN_BOTS or login in _bot_logins
 
 
 def author_of(pr: dict) -> str:
