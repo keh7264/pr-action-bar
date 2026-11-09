@@ -1458,10 +1458,11 @@ query($owner: String!, $name: String!) {
         recent: commits(last: 30) { nodes { commit { oid committedDate parents(first: 2) { totalCount } } } }
         reviews(last: 100) { nodes { author { login } state submittedAt commit { oid } } }
         comments(last: 100) { nodes { author { login } createdAt body } }
-        reviewThreads(last: 100) {
+        reviewThreads(last: 50) {
           nodes {
             isResolved
-            comments(last: 30) { nodes { author { login } } }
+            first: comments(first: 1) { nodes { author { login } } }
+            comments(last: 10) { nodes { author { login } } }
           }
         }
       }
@@ -1492,7 +1493,8 @@ def team_action(pr: dict, me: str, ps: dict, repo_seen: bool = True) -> str:
     for t in threads:
         if t["isResolved"]:
             continue
-        people = {c["author"]["login"] for c in t["comments"]["nodes"] if c.get("author")}
+        # 스레드를 연 사람과 최근 10개 글쓴이. 중간에만 끼었던 긴 스레드는 놓칠 수 있다
+        people = {c["author"]["login"] for c in t["first"]["nodes"] + t["comments"]["nodes"] if c.get("author")}
         last = thread_last_author(t)
         if me in people and last.get("login") not in (me, None) and not is_bot(last.get("login")):
             return "Re-review"

@@ -50,7 +50,7 @@ class Base(unittest.TestCase):
 
 def thread(*authors: str, resolved: bool = False) -> dict:
     nodes = [{"author": {"login": a}} for a in authors]
-    return {"isResolved": resolved, "comments": {"nodes": nodes}}
+    return {"isResolved": resolved, "first": {"nodes": nodes[:1]}, "comments": {"nodes": nodes[-10:]}}
 
 
 def gql_pr(**over) -> dict:
@@ -108,6 +108,10 @@ class ConversationStatus(Base):
     def setUp(self):
         super().setUp()
         self.config(repos={})
+
+    def test_내가_연_긴_스레드에_답이_달리면_Re_review(self):
+        pr = gql_pr(reviewThreads={"nodes": [thread("me", *["alice"] * 15)]})
+        self.assertEqual(self.m.team_action(pr, "me", {}, False), "Re-review")
 
     def test_내_댓글_뒤에_작성자가_대화_탭에_답하면_Re_review(self):
         pr = gql_pr(comments={"nodes": [gc("me", "2026-01-01T00:00:00Z"), gc("alice", "2026-01-02T00:00:00Z")]})
