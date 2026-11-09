@@ -478,8 +478,16 @@ def paused(state: dict) -> bool:
     return bool(until and until > now())
 
 
-# 이 프로세스에서 쉬기가 끝나는 시각 (time.time). 병렬 리뷰 스레드가 claude 를 부르기 직전에 본다
+# 이 프로세스에서 쉬기가 끝나는 시각 (time.time). 병렬 리뷰 스레드가 claude 를 부르기 직전에 본다.
+# state["paused_until"] 과 같이 바꾼다 (pause · clear_pause)
 _pause_until = 0.0
+
+
+def clear_pause(state: dict) -> None:
+    global _pause_until
+    _pause_until = 0.0
+    state.pop("paused_until", None)
+    state.pop("pause_kind", None)
 
 
 def pause(cfg: dict, state: dict, e: Transient) -> None:
@@ -689,9 +697,10 @@ def stay_awake():
 
 
 def claude(cfg: dict, cwd: Path, text: str, *, resume: str | None = None, fork: bool = False,
-           timeout_minutes: float | None = None, repo: str | None = None) -> dict:
-    if time.time() < _pause_until:
-        # 한 작업이 사용 한도 · 로그인 문제로 쉬기에 들어갔으면 다른 리뷰도 더 부르지 않는다
+           timeout_minutes: float | None = None, repo: str | None = None, check_pause: bool = True) -> dict:
+    """check_pause: 한 작업이 사용 한도 · 로그인 문제로 쉬기에 들어갔으면 새 리뷰는 시작하지 않는다.
+    이미 시작한 리뷰의 다음 단계는 False 로 부른다. 끝난 단계를 버리고 나중에 처음부터 다시 돌면 사용량이 두 배가 된다."""
+    if check_pause and time.time() < _pause_until:
         raise Paused("쉬는 중이라 claude 를 부르지 않음")
     argv = [tool(cfg, "claude"), "-p", text, *claude_args(cfg, repo)]
     if resume:
@@ -830,14 +839,16 @@ def review_json(cfg: dict, state: dict, wt: Path, sid: str, repo: str, pr: dict)
 
     실패해도 리뷰는 끝난 것이라 None (형식 확인 필요) 으로 넘긴다.
     사용 한도 · 로그인 같은 일시적 실패는 리뷰 결과는 살리되 쉬기에 들어가 다른 작업도 멈춘다.
+    다른 작업이 쉬는 중이어도 이 리뷰는 이미 끝났으니 변환은 해 본다.
     """
     try:
-        out = claude(cfg, wt, prompt("to_json"), resume=sid, fork=True, timeout_minutes=10, repo=repo)
+        out = claude(cfg, wt, prompt("to_json"), resume=sid, fork=True, timeout_minutes=10, repo=repo,
+                     check_pause=False)
     except Transient as e:
         log(f"{repo}#{pr['number']} 리뷰 JSON 변환 실패: {short_error(e)}")
         pause(cfg, state, e)
         return None
-    except (Failed, Paused, subprocess.TimeoutExpired) as e:
+    except (Failed, subprocess.TimeoutExpired) as e:
         log(f"{repo}#{pr['number']} 리뷰 JSON 변환 실패: {short_error(e)}")
         return None
     data = parse_review(str(out.get("result", "")))
@@ -883,9 +894,11 @@ def review_pr(cfg: dict, state: dict, repo: str, repo_dir: str, pr: dict) -> Non
     with stay_awake():
         first = claude(cfg, wt, prompt("review", NUMBER=pr["number"], EFFORT=cfg["effort"]), repo=repo)
         sid = first["session_id"]
-        claude(cfg, wt, prompt("recheck_bot", FEEDBACK=feedback) if bot else prompt("recheck"), resume=sid, repo=repo)
+        claude(cfg, wt, prompt("recheck_bot", FEEDBACK=feedback) if bot else prompt("recheck"), resume=sid, repo=repo,
+               check_pause=False)
         lang = {"ko": "한국어", "en": "English"}.get(cfg["language"], cfg["language"])
-        final = claude(cfg, wt, prompt("summarize_bot" if bot else "summarize", LANGUAGE=lang), resume=sid, repo=repo)
+        final = claude(cfg, wt, prompt("summarize_bot" if bot else "summarize", LANGUAGE=lang), resume=sid, repo=repo,
+                       check_pause=False)
         markdown = str(final.get("result", ""))
         if not markdown.strip():
             raise Failed("리뷰 정리가 비어 있다")
@@ -1786,6 +1799,11 @@ def queued() -> set[tuple[str, int]]:
     return out
 
 
+def enqueue(repo: str, number: int) -> None:
+    QUEUE.mkdir(parents=True, exist_ok=True)
+    write_atomic(QUEUE / f"{repo}#{number}", iso() + "\n")
+
+
 def unqueue(repo: str, number: int) -> None:
     (QUEUE / f"{repo}#{number}").unlink(missing_ok=True)
 
@@ -1805,8 +1823,7 @@ def poll_locked(cfg: dict, state: dict) -> None:
         return
     if not cfg["auto_review"]:
         # 띠만 쓰는 모드에서는 쉴 리뷰가 없다
-        state.pop("paused_until", None)
-        state.pop("pause_kind", None)
+        clear_pause(state)
     running: dict[tuple[str, int], futures.Future] = {}
     # 이 실행에서 리뷰 스레드가 끝난 시각. 보류 · 실패로 바로 끝난 PR 을 poll_minutes 안에 다시 넣지 않는다
     finished_at: dict[tuple[str, int], float] = {}
@@ -1837,8 +1854,7 @@ def poll_locked(cfg: dict, state: dict) -> None:
     finally:
         pool.shutdown(wait=True)
     if not paused(state):
-        state.pop("paused_until", None)
-        state.pop("pause_kind", None)
+        clear_pause(state)
 
 
 def poll_pass(cfg: dict, state: dict, me: str, pool: futures.Executor,
@@ -1876,6 +1892,7 @@ def poll_pass(cfg: dict, state: dict, me: str, pool: futures.Executor,
         for key in [k for k in asked if k[0] == repo and k[1] not in open_numbers]:
             log(f"{key[0]}#{key[1]} 바로 리뷰 요청 무시: 열린 PR 이 아니다")
             unqueue(*key)
+        stop = False
         for pr in prs:
             key = (repo, pr["number"])
             if key in running:
@@ -1888,7 +1905,7 @@ def poll_pass(cfg: dict, state: dict, me: str, pool: futures.Executor,
                     ps.pop("failures", None)
                     unqueue(*key)
                     log(f"{repo}#{pr['number']} 바로 리뷰 시작")
-                    running[key] = pool.submit(review_worker, cfg, state, repo, repo_dir, pr)
+                    running[key] = pool.submit(review_worker, cfg, state, repo, repo_dir, pr, True)
                 continue
             if not cfg["auto_review"]:
                 # 리뷰만 끈다. 그사이 열린 PR 은 본 것으로 기록해 나중에 다시 켜도 한꺼번에 리뷰하지 않는다
@@ -1910,7 +1927,9 @@ def poll_pass(cfg: dict, state: dict, me: str, pool: futures.Executor,
                 (check_feedback if is_bot_pr(cfg, pr) else check_replies)(cfg, state, me, repo, repo_dir, pr)
                 ps.pop("transient_count", None)
             except Paused:
-                return  # 리뷰 스레드가 쉬기에 들어갔다. 이 PR 은 쉬기가 끝난 뒤 다시 본다
+                # 리뷰 스레드가 쉬기에 들어갔다. 남은 PR 은 쉬기가 끝난 뒤 보고, 이 레포 정리 · 저장은 마친다
+                stop = True
+                break
             except Transient as e:
                 if count_transient(cfg, state, repo, pr, ps, e, reviewing=False):
                     return
@@ -1919,12 +1938,19 @@ def poll_pass(cfg: dict, state: dict, me: str, pool: futures.Executor,
             save_state(state)
         busy = {n for (r, n) in running if r == repo}
         cleanup_closed(cfg, state, repo, repo_dir, {p["number"] for p in prs} | busy, len(prs) >= PR_LIST_LIMIT)
+        if stop:
+            save_state(state)
+            return
 
 
 def count_transient(cfg: dict, state: dict, repo: str, pr: dict, ps: dict, e: Transient, *, reviewing: bool) -> bool:
     """일시적 실패를 세고 리뷰를 쉰다. 분류가 틀려도 끝없이 쉬지 않게 같은 PR 에서 연달아 나면 실패로 센다.
     사용 한도는 몇 시간 이어질 수 있어 넉넉히 기다린다. 쉬게 됐으면 True."""
     ps.pop("reviewing_since", None)
+    if paused(state):
+        # 다른 작업이 먼저 쉬기에 들어갔다. 같은 원인이니 이 PR 의 실패로 세지 않고 쉬기도 늘리지 않는다
+        log(f"{repo}#{pr['number']} 쉬는 중에 일시적 실패: {short_error(e)}")
+        return True
     ps["transient_count"] = ps.get("transient_count", 0) + 1
     if ps["transient_count"] >= (LIMIT_STREAK if e.kind == "limit" else 3):
         (record_failure if reviewing else record_reply_failure)(cfg, state, repo, pr, ps, short_error(e))
@@ -1933,8 +1959,11 @@ def count_transient(cfg: dict, state: dict, repo: str, pr: dict, ps: dict, e: Tr
     return True
 
 
-def review_worker(cfg: dict, state: dict, repo: str, repo_dir: str, pr: dict) -> None:
-    """리뷰 스레드 하나. 이 PR 의 ps 는 이 스레드만 고친다."""
+def review_worker(cfg: dict, state: dict, repo: str, repo_dir: str, pr: dict, requested: bool = False) -> None:
+    """리뷰 스레드 하나. 이 PR 의 ps 는 이 스레드만 고친다.
+
+    requested: 바로 리뷰 요청. 쉬기로 멈추면 요청을 대기열에 되돌린다 (리뷰한 PR 은 자동 리뷰 대상이 아니라 사라진다).
+    """
     ps = pr_state(state, repo, pr["number"])
     try:
         review_pr(cfg, state, repo, repo_dir, pr)
@@ -1942,8 +1971,12 @@ def review_worker(cfg: dict, state: dict, repo: str, repo_dir: str, pr: dict) ->
     except Paused:
         ps.pop("reviewing_since", None)  # 다른 작업이 쉬기에 들어갔다. 실패로 세지 않고 쉬기가 끝나면 다시 리뷰한다
         log(f"{repo}#{pr['number']} 쉬는 중이라 리뷰를 멈춤")
+        if requested:
+            enqueue(repo, pr["number"])
     except Transient as e:
         count_transient(cfg, state, repo, pr, ps, e, reviewing=True)
+        if requested and "failures" not in ps:
+            enqueue(repo, pr["number"])
     except Exception as e:  # 예상 못 한 오류도 실패로 세서 같은 리뷰를 끝없이 다시 돌지 않게 한다
         ps.pop("reviewing_since", None)
         record_failure(cfg, state, repo, pr, ps, short_error(e))
@@ -1971,8 +2004,7 @@ def review_now(repo: str, number: int) -> int:
     if repo not in cfg["repos"]:
         print(f"{repo} 는 설정에 없는 레포다. 레포: {', '.join(cfg['repos']) or '(없음)'}", file=sys.stderr)
         return 1
-    QUEUE.mkdir(parents=True, exist_ok=True)
-    write_atomic(QUEUE / f"{repo}#{number}", iso() + "\n")
+    enqueue(repo, number)
     if PLIST.exists():
         # launchd 로 띄우면 이 명령은 바로 끝나고 리뷰는 뒤에서 돈다. 이미 폴링이 돌고 있으면 그 루프가 가져간다
         subprocess.run(["/bin/launchctl", "kickstart", f"gui/{os.getuid()}/{LABEL}"], capture_output=True, timeout=10)

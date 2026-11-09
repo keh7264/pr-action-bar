@@ -475,6 +475,42 @@ class PausePropagation(Base):
         with self.assertRaises(self.m.Paused):
             self.m.claude(cfg, self.home, "hi")
 
+    def test_쉬기를_풀면_claude_를_다시_부른다(self):
+        cfg = self.config(repos={})
+        self.m.notify = lambda *a, **k: None
+        state = {}
+        self.m.pause(cfg, state, self.m.Transient("limit", "usage limit reached"))
+        self.m.clear_pause(state)
+        self.assertEqual(self.m._pause_until, 0.0)
+        self.assertNotIn("paused_until", state)
+
+
+class PauseMidReview(ReviewBase):
+    def test_시작한_리뷰의_다음_단계는_쉬기와_상관없이_마친다(self):
+        kwargs = []
+        real = self.m.claude
+        self.m.claude = lambda cfg, wt, text, **k: kwargs.append(k.get("check_pause", True)) or real(cfg, wt, text, **k)
+        self.m.review_pr(self.cfg, self.state, "app", "/repo", self.pr)
+        self.assertEqual(kwargs, [True, False, False, False])  # 리뷰 시작만 쉬기를 본다 (재검토 · 정리 · JSON 은 마친다)
+
+    def test_바로_리뷰_요청이_쉬기로_멈추면_대기열에_되돌린다(self):
+        def paused_claude(*a, **k):
+            raise self.m.Paused("쉬는 중")
+        self.m.claude = paused_claude
+        self.m.review_worker(self.cfg, self.state, "app", "/repo", self.pr, True)
+        self.assertIn(("app", 1), self.m.queued())
+
+    def test_다른_작업이_쉬는_중에_난_일시적_실패는_세지_않는다(self):
+        def limited(*a, **k):
+            raise self.m.Transient("limit", "usage limit reached")
+        self.m.claude = limited
+        until = self.m.iso(self.m.now() + self.m.dt.timedelta(minutes=30))
+        self.state.update(paused_until=until)
+        self.m.review_worker(self.cfg, self.state, "app", "/repo", self.pr)
+        ps = self.state["repos"]["app"]["prs"]["1"]
+        self.assertNotIn("transient_count", ps)
+        self.assertEqual(self.state["paused_until"], until)  # 쉬기를 늘리지 않는다
+
 
 class SystemPrompt(Base):
     def setUp(self):
