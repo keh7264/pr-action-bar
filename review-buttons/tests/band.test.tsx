@@ -144,6 +144,14 @@ test('조회에 실패한 레포는 경고를 띄운다', async ($, on) => {
   await ui.unmount()
 })
 
+test('조회 실패 경고에 남겨 둔 줄의 조회 시각을 적는다', async ($, on) => {
+  const status = { ...STATUS_JSON, failed_repos: ['app'], checked_at: { app: '2026-01-01T05:20:00Z' } }
+  await setup($, on, { files: { [STATUS]: JSON.stringify(status) } })
+  const ui = await mount($)
+  expect(await ui.find({ type: 'Text', text: /조회 실패: app \(\d\d:\d\d 기준\)/ })).toBeDefined()
+  await ui.unmount()
+})
+
 test('↻ 를 빠르게 두 번 눌러도 새로고침은 한 번만 돈다', async ($, on) => {
   let release = () => {}
   const hold = new Promise<void>(r => { release = r })

@@ -5,7 +5,7 @@ import type { Pr, Status } from '../types'
 
 const EMPTY: Status = {
   updatedAt: null, items: [], prs: [], gitDirs: {}, pausedUntil: null, python: null,
-  failedRepos: [], script: null, worktrees: null, version: null,
+  failedRepos: [], checkedAt: {}, script: null, worktrees: null, version: null,
 }
 
 const status = atom({ plugin: 'review-buttons', key: 'status' } as const, EMPTY)
@@ -77,6 +77,7 @@ async function loadStatus($: EngineInterface) {
     pausedUntil: raw.paused_until ?? null,
     python: raw.python ?? null,
     failedRepos: raw.failed_repos ?? [],
+    checkedAt: raw.checked_at ?? {},
     script: raw.ui?.script ?? null,
     worktrees: raw.ui?.worktrees ?? null,
     version: raw.version ?? null,
@@ -210,7 +211,7 @@ export const register: Register = on => {
     if (e.props.hasSurvey) return next(e)
 
     const { Box, Button, Text } = $.ui.resolve(e)
-    const { items, updatedAt, pausedUntil, failedRepos, version } = await read($, status)
+    const { items, updatedAt, pausedUntil, failedRepos, checkedAt, version } = await read($, status)
     const pluginVersion = await read($, bundled)
     const current = await read($, thisPr)
     const busy = await read($, refreshing)
@@ -235,7 +236,12 @@ export const register: Register = on => {
             />
           </Box>
           {pausedUntil ? <Text color="warning">{`리뷰 쉬는 중 (${hhmm(pausedUntil)}까지)`}</Text> : null}
-          {failedRepos.length > 0 ? <Text color="warning">{`조회 실패: ${failedRepos.join(', ')}`}</Text> : null}
+          {failedRepos.length > 0 ? (
+            // 조회에 실패한 레포는 직전 줄을 남겨 둔다. 그 줄이 언제 값인지 같이 적는다
+            <Text color="warning">{`조회 실패: ${failedRepos
+              .map(r => (checkedAt[r] ? `${r} (${hhmm(checkedAt[r])} 기준)` : r))
+              .join(', ')}`}</Text>
+          ) : null}
           {pluginVersion && updatedAt && version !== pluginVersion ? (
             <Text color="warning">{`봇 스크립트 ${version ?? '옛 버전'} → ${pluginVersion} 업데이트 필요: /pr-action-bar update`}</Text>
           ) : null}

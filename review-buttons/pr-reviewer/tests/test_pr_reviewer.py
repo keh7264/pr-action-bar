@@ -879,6 +879,30 @@ class Version(Base):
         self.assertEqual(self.m.VERSION, json.loads(manifest.read_text())["version"])
 
 
+class FailedRepoStatus(Base):
+    def test_조회에_실패한_레포는_직전_줄과_그_조회_시각을_남긴다(self):
+        m = self.m
+        cfg = self.config(repos={"app": str(self.home), "api": str(self.home)})
+        m.my_login = lambda *a: "me"
+        m.repo_slug_cached = lambda cfg, d: "o/r"
+        m.git = lambda *a, **k: subprocess.CompletedProcess([], 0, "/g\n", "")
+
+        def gh(cfg, args, **k):
+            if "name=r" in args and gh.calls:
+                raise m.Transient("network", "VPN")
+            gh.calls += 1
+            return {"data": {"repository": {"pullRequests": {"nodes": []}}}}
+        gh.calls = 0
+        m.gh_json = gh
+        old = {"repo": "api", "number": 3}
+        m.write_json(m.STATUS, {"prs": [old], "items": [old], "checked_at": {"api": "2026-01-01T09:00:00+09:00"}})
+        status = m.build_status(cfg, {})
+        self.assertEqual(status["failed_repos"], ["api"])
+        self.assertEqual(status["prs"], [old])
+        self.assertEqual(status["checked_at"]["api"], "2026-01-01T09:00:00+09:00")
+        self.assertNotEqual(status["checked_at"]["app"], "2026-01-01T09:00:00+09:00")
+
+
 class Ops(Base):
     """/pr-action-bar 가 부르는 운영 명령."""
 

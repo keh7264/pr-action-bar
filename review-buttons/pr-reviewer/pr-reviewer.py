@@ -1637,6 +1637,7 @@ def build_status(cfg: dict, state: dict) -> dict:
     me = my_login(cfg, state)
     items, prs, git_dirs = [], [], {}
     errors, failed = [], []
+    checked_at: dict[str, str] = {}  # 레포마다 마지막으로 조회에 성공한 시각
     prev = read_json(STATUS, {})
     for repo, repo_dir in cfg["repos"].items():
         try:
@@ -1653,7 +1654,10 @@ def build_status(cfg: dict, state: dict) -> dict:
             items += [p for p in prev.get("items", []) if p.get("repo") == repo]
             if repo in prev.get("git_dirs", {}):
                 git_dirs[repo] = prev["git_dirs"][repo]
+            if repo in prev.get("checked_at", {}):
+                checked_at[repo] = prev["checked_at"][repo]  # 남겨 둔 줄이 언제 값인지 띠에 보인다
             continue
+        checked_at[repo] = iso()
         for pr in data["data"]["repository"]["pullRequests"]["nodes"]:
             author = author_of(pr)
             ps = state.get("repos", {}).get(repo, {}).get("prs", {}).get(str(pr["number"]), {})
@@ -1685,7 +1689,7 @@ def build_status(cfg: dict, state: dict) -> dict:
                 items.append(entry)
     status = {"updated_at": iso(), "version": VERSION, "me": me, "python": cfg.get("paths", {}).get("python3", sys.executable), "items": items, "prs": prs, "git_dirs": git_dirs,
               "paused_until": state.get("paused_until") if cfg["auto_review"] and paused(state) else None,
-              "errors": errors, "failed_repos": failed,
+              "errors": errors, "failed_repos": failed, "checked_at": checked_at,
               # mod 는 PR_REVIEWER_HOME 을 모를 수 있다. 스크립트와 리뷰 worktree 자리를 여기서 알려 준다
               "ui": {"script": str(BIN / "pr-reviewer.py"), "worktrees": str(WORKTREES)}}
     return status

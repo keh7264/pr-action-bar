@@ -28,6 +28,8 @@ export type Status = {
   python: string | null
   /** 이번 조회에 실패한 레포. 띠에는 그 레포의 직전 PR 이 남아 있다 */
   failedRepos: string[]
+  /** 레포마다 마지막으로 조회에 성공한 시각 */
+  checkedAt: Record<string, string>
   /** 봇 스크립트와 리뷰 worktree 자리 (PR_REVIEWER_HOME 을 따른다). 옛 status.json 에는 없다 */
   script: string | null
   worktrees: string | null
