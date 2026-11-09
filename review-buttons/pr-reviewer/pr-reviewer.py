@@ -43,7 +43,7 @@ from concurrent import futures
 from pathlib import Path
 
 # review-buttons 플러그인의 plugin.json version 과 같게 둔다. 띠가 설치본(status.json)과 플러그인 안의 것을 견준다
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 
 HOME = Path.home()
 ROOT = Path(os.environ.get("PR_REVIEWER_HOME", HOME / ".pr-reviewer"))
