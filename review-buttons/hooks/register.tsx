@@ -192,18 +192,13 @@ function groupByAction(items: Pr[]): [string, Pr[]][] {
 }
 
 // 오늘이 아닌 시각은 날짜도 붙인다. 어제 18:05 값이 오늘 18:05 처럼 보이지 않게
-function stamp(iso: string) {
-  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}:\d{2})/.exec(iso)
+function stamp(iso: string | null) {
+  const m = iso ? /^(\d{4})-(\d{2})-(\d{2})T(\d{2}:\d{2})/.exec(iso) : null
   if (!m) return '--:--'
   const d = new Date()
   const pad = (n: number) => String(n).padStart(2, '0')
   const today = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
   return `${m[1]}-${m[2]}-${m[3]}` === today ? m[4] : `${Number(m[2])}/${Number(m[3])} ${m[4]}`
-}
-
-function hhmm(iso: string | null) {
-  const m = iso ? /T(\d{2}:\d{2})/.exec(iso) : null
-  return m ? m[1] : '--:--'
 }
 
 export const register: Register = on => {
@@ -239,13 +234,13 @@ export const register: Register = on => {
           <Box key="frame-refresh">
             <Button
               key="refresh"
-              label={busy ? '↻ 가져오는 중' : `↻ ${hhmm(updatedAt)}`}
+              label={busy ? '↻ 가져오는 중' : `↻ ${stamp(updatedAt)}`}
               plain
               hover={{ underline: true }}
               onPress={() => void refresh($)}
             />
           </Box>
-          {pausedUntil ? <Text color="warning">{`리뷰 쉬는 중 (${hhmm(pausedUntil)}까지)`}</Text> : null}
+          {pausedUntil ? <Text color="warning">{`리뷰 쉬는 중 (${stamp(pausedUntil)}까지)`}</Text> : null}
           {failedRepos.length > 0 ? (
             // 조회에 실패한 레포는 직전 줄을 남겨 둔다. 그 줄이 언제 값인지 같이 적는다
             <Text color="warning">{`조회 실패: ${failedRepos
