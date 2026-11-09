@@ -432,6 +432,50 @@ class ReviewFlow(ReviewBase):
         self.m.review_pr(self.cfg, self.state, "app", "/repo", self.pr)
         self.assertEqual(self.notes, ["app#1 리뷰 완료 (형식 확인 필요)"])
 
+    def test_JSON_변환이_사용_한도에_걸리면_리뷰는_남기고_쉰다(self):
+        real = self.m.claude
+
+        def limited(cfg, wt, text, **k):
+            if k.get("fork"):
+                raise self.m.Transient("limit", "usage limit reached")
+            return real(cfg, wt, text, **k)
+        self.m.claude = limited
+        self.m.review_pr(self.cfg, self.state, "app", "/repo", self.pr)
+        ps = self.state["repos"]["app"]["prs"]["1"]
+        self.assertTrue(ps["reviewed_at"])
+        self.assertFalse(ps["format_ok"])
+        self.assertTrue(self.m.paused(self.state))
+        self.assertEqual(self.notes, ["pr-reviewer 쉬는 중", "app#1 리뷰 완료 (형식 확인 필요)"])
+
+    def test_다른_작업이_쉬는_중이면_리뷰를_멈추고_실패로_세지_않는다(self):
+        def paused_claude(*a, **k):
+            raise self.m.Paused("쉬는 중")
+        self.m.claude = paused_claude
+        self.m.review_worker(self.cfg, self.state, "app", "/repo", self.pr)
+        ps = self.state["repos"]["app"]["prs"]["1"]
+        for key in ("failures", "transient_count", "reviewing_since", "reviewed_at"):
+            self.assertNotIn(key, ps)
+
+    def test_쉬는_중에_끝난_리뷰는_알림_쿨다운을_지우지_않는다(self):
+        self.state.update(paused_until=self.m.iso(self.m.now() + self.m.dt.timedelta(minutes=30)),
+                          notified={"pause-limit": self.m.iso()})
+        self.m.review_pr(self.cfg, self.state, "app", "/repo", self.pr)
+        self.assertIn("pause-limit", self.state["notified"])
+
+    def test_쉬는_중이_아니면_리뷰가_끝날_때_알림_쿨다운을_지운다(self):
+        self.state["notified"] = {"pause-limit": self.m.iso()}
+        self.m.review_pr(self.cfg, self.state, "app", "/repo", self.pr)
+        self.assertEqual(self.state["notified"], {})
+
+
+class PausePropagation(Base):
+    def test_쉬기에_들어가면_claude_를_부르지_않는다(self):
+        cfg = self.config(repos={})
+        self.m.notify = lambda *a, **k: None
+        self.m.pause(cfg, {}, self.m.Transient("limit", "usage limit reached"))
+        with self.assertRaises(self.m.Paused):
+            self.m.claude(cfg, self.home, "hi")
+
 
 class SystemPrompt(Base):
     def setUp(self):

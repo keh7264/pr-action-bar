@@ -221,6 +221,10 @@ class Failed(Exception):
     """이 PR 에서만 생긴 실패."""
 
 
+class Paused(Exception):
+    """다른 작업이 쉬기에 들어가 claude 를 부르지 않고 멈췄다. 이 PR 의 실패로 세지 않는다."""
+
+
 def now() -> dt.datetime:
     return dt.datetime.now().astimezone()
 
@@ -474,7 +478,13 @@ def paused(state: dict) -> bool:
     return bool(until and until > now())
 
 
+# 이 프로세스에서 쉬기가 끝나는 시각 (time.time). 병렬 리뷰 스레드가 claude 를 부르기 직전에 본다
+_pause_until = 0.0
+
+
 def pause(cfg: dict, state: dict, e: Transient) -> None:
+    global _pause_until
+    _pause_until = time.time() + cfg["pause_minutes"] * 60
     state["paused_until"] = iso(now() + dt.timedelta(minutes=cfg["pause_minutes"]))
     state["pause_kind"] = e.kind
     log(f"일시적 실패({e.kind})로 {cfg['pause_minutes']}분 쉰다: {e}")
@@ -680,6 +690,9 @@ def stay_awake():
 
 def claude(cfg: dict, cwd: Path, text: str, *, resume: str | None = None, fork: bool = False,
            timeout_minutes: float | None = None, repo: str | None = None) -> dict:
+    if time.time() < _pause_until:
+        # 한 작업이 사용 한도 · 로그인 문제로 쉬기에 들어갔으면 다른 리뷰도 더 부르지 않는다
+        raise Paused("쉬는 중이라 claude 를 부르지 않음")
     argv = [tool(cfg, "claude"), "-p", text, *claude_args(cfg, repo)]
     if resume:
         argv += ["--resume", resume]
@@ -812,14 +825,19 @@ def record_reply_failure(cfg: dict, state: dict, repo: str, pr: dict, ps: dict, 
     log(f"{repo}#{pr['number']} 답글 리뷰 실패({ps['reply_failures']}/{cfg['max_attempts']}): {err}")
 
 
-def review_json(cfg: dict, wt: Path, sid: str, repo: str, pr: dict) -> dict | None:
+def review_json(cfg: dict, state: dict, wt: Path, sid: str, repo: str, pr: dict) -> dict | None:
     """정리 결과를 JSON 으로 받는다. 세션을 갈라 부르니 리뷰 탭의 마지막 답은 마크다운 정리로 남는다.
 
     실패해도 리뷰는 끝난 것이라 None (형식 확인 필요) 으로 넘긴다.
+    사용 한도 · 로그인 같은 일시적 실패는 리뷰 결과는 살리되 쉬기에 들어가 다른 작업도 멈춘다.
     """
     try:
         out = claude(cfg, wt, prompt("to_json"), resume=sid, fork=True, timeout_minutes=10, repo=repo)
-    except (Failed, Transient, subprocess.TimeoutExpired) as e:
+    except Transient as e:
+        log(f"{repo}#{pr['number']} 리뷰 JSON 변환 실패: {short_error(e)}")
+        pause(cfg, state, e)
+        return None
+    except (Failed, Paused, subprocess.TimeoutExpired) as e:
         log(f"{repo}#{pr['number']} 리뷰 JSON 변환 실패: {short_error(e)}")
         return None
     data = parse_review(str(out.get("result", "")))
@@ -871,7 +889,7 @@ def review_pr(cfg: dict, state: dict, repo: str, repo_dir: str, pr: dict) -> Non
         markdown = str(final.get("result", ""))
         if not markdown.strip():
             raise Failed("리뷰 정리가 비어 있다")
-        data = review_json(cfg, wt, sid, repo, pr)
+        data = review_json(cfg, state, wt, sid, repo, pr)
     seconds = int(time.time() - started)
     out = REVIEWS / repo / f"{pr['number']}-{pr['headRefOid'][:9]}.md"
     text = render_review(cfg, repo, pr, markdown, data, sid, wt, seconds)
@@ -888,7 +906,9 @@ def review_pr(cfg: dict, state: dict, repo: str, repo_dir: str, pr: dict) -> Non
     ps.pop("gave_up", None)
     ps.pop("checked_updated_at", None)  # 새 기준점으로 다음 바퀴에 한 번은 확인한다
     ps.pop("seen_sha", None)  # 새 리뷰가 기준이다. 다음 답글의 커밋 목록은 reviewed_sha 부터 센다
-    state.get("notified", {}).clear()
+    if not paused(state):
+        # 문제가 풀렸으니 다음 쉬기는 바로 알린다. 다른 작업이 쉬는 중이면 같은 알림이 또 나가지 않게 둔다
+        state.get("notified", {}).clear()
     save_state(state)
     log(f"{repo}#{pr['number']} 리뷰 완료 ({seconds}초) → {out}")
     done = "리뷰 완료" if data is not None else "리뷰 완료 (형식 확인 필요)"
@@ -1883,6 +1903,8 @@ def poll_pass(cfg: dict, state: dict, me: str, pool: futures.Executor,
             try:
                 (check_feedback if is_bot_pr(cfg, pr) else check_replies)(cfg, state, me, repo, repo_dir, pr)
                 ps.pop("transient_count", None)
+            except Paused:
+                return  # 리뷰 스레드가 쉬기에 들어갔다. 이 PR 은 쉬기가 끝난 뒤 다시 본다
             except Transient as e:
                 if count_transient(cfg, state, repo, pr, ps, e, reviewing=False):
                     return
@@ -1911,6 +1933,9 @@ def review_worker(cfg: dict, state: dict, repo: str, repo_dir: str, pr: dict) ->
     try:
         review_pr(cfg, state, repo, repo_dir, pr)
         ps.pop("transient_count", None)
+    except Paused:
+        ps.pop("reviewing_since", None)  # 다른 작업이 쉬기에 들어갔다. 실패로 세지 않고 쉬기가 끝나면 다시 리뷰한다
+        log(f"{repo}#{pr['number']} 쉬는 중이라 리뷰를 멈춤")
     except Transient as e:
         count_transient(cfg, state, repo, pr, ps, e, reviewing=True)
     except Exception as e:  # 예상 못 한 오류도 실패로 세서 같은 리뷰를 끝없이 다시 돌지 않게 한다
@@ -2575,7 +2600,7 @@ def main() -> int:
             print("\n".join(f"- {p}" for p in problems) or "문제 없음")
             return 1 if problems else 0
         return poll()
-    except (Failed, Transient, subprocess.TimeoutExpired) as e:
+    except (Failed, Transient, Paused, subprocess.TimeoutExpired) as e:
         # 띠의 토스트에 stderr 마지막 줄이 뜬다
         print(short_error(e), file=sys.stderr)
         return 1
