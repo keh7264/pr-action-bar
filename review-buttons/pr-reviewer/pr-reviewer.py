@@ -104,7 +104,7 @@ ALLOWED_TOOLS = [
     "Bash(gh pr view:*)", "Bash(gh pr diff:*)", "Bash(gh pr checks:*)",
     "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(git blame:*)",
     "Bash(git status:*)", "Bash(git rev-parse:*)", "Bash(git merge-base:*)", "Bash(git ls-files:*)",
-    "Bash(git grep:*)", "Bash(git cat-file:*)",
+    "Bash(git cat-file:*)",
     # 출력을 거르는 명령. 파일을 쓸 수 있는 sed -i, sort -o 는 넣지 않는다
     "Bash(head:*)", "Bash(tail:*)", "Bash(wc:*)", "Bash(cut:*)", "Bash(tr:*)",
 ]
@@ -114,6 +114,9 @@ DISALLOWED_TOOLS = [
     "Bash(gh pr edit:*)", "Bash(gh api:*)", "Bash(gh issue:*)",
     "Bash(git push:*)", "Bash(git commit:*)", "Bash(git fetch:*)", "Bash(git pull:*)",
     "Bash(git checkout:*)", "Bash(git reset:*)", "Bash(git config:*)", "Bash(rg:*)",
+    # git grep 은 -O<명령> 으로 맞은 파일을 그 명령에 넘긴다. -nOcmd 처럼 묶거나 --open 처럼 줄여 써도 되니
+    # 옵션 패턴으로는 못 막는다. 검색은 Grep 도구로 한다
+    "Bash(git grep:*)",
     # 허용 규칙은 접두사만 본다. 파일을 쓰거나 명령을 실행하는 옵션은 위치와 상관없이 막는다
     "Bash(*--output*)", "Bash(*--upload-pack*)", "Bash(*--receive-pack*)", "Bash(*--ext-diff*)",
     "Bash(*--textconv*)", "Bash(*--exec*)", "Bash(*-o *)", "Bash(*>*)",
