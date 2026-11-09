@@ -50,8 +50,7 @@ class Base(unittest.TestCase):
 
 def thread(*authors: str, resolved: bool = False) -> dict:
     nodes = [{"author": {"login": a}} for a in authors]
-    return {"isResolved": resolved, "first": {"nodes": nodes[:1]}, "last": {"nodes": nodes[-1:]},
-            "all": {"nodes": nodes}}
+    return {"isResolved": resolved, "comments": {"nodes": nodes}}
 
 
 def gql_pr(**over) -> dict:

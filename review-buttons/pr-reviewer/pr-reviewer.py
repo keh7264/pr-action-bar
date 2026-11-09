@@ -1443,14 +1443,12 @@ query($owner: String!, $name: String!) {
         number title url isDraft headRefOid headRefName isCrossRepository author { login } reviewDecision mergeable
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
         recent: commits(last: 30) { nodes { commit { oid committedDate parents(first: 2) { totalCount } } } }
-        reviews(last: 50) { nodes { author { login } state submittedAt commit { oid } } }
-        comments(last: 50) { nodes { author { login } createdAt body } }
-        reviewThreads(first: 50) {
+        reviews(last: 100) { nodes { author { login } state submittedAt commit { oid } } }
+        comments(last: 100) { nodes { author { login } createdAt body } }
+        reviewThreads(last: 100) {
           nodes {
             isResolved
-            first: comments(first: 1) { nodes { author { login } } }
-            last:  comments(last: 1)  { nodes { author { login } } }
-            all:   comments(first: 10) { nodes { author { login } } }
+            comments(last: 30) { nodes { author { login } } }
           }
         }
       }
@@ -1472,13 +1470,17 @@ def last_commit_at(pr: dict) -> str:
     return max((n["commit"].get("committedDate") or "" for n in pr["recent"]["nodes"]), default="")
 
 
+def thread_last_author(thread: dict) -> dict:
+    return (thread["comments"]["nodes"] or [{}])[-1].get("author") or {}
+
+
 def team_action(pr: dict, me: str, ps: dict, repo_seen: bool = True) -> str:
     threads = pr["reviewThreads"]["nodes"]
     for t in threads:
         if t["isResolved"]:
             continue
-        people = {c["author"]["login"] for c in t["all"]["nodes"] if c.get("author")}
-        last = (t["last"]["nodes"] or [{}])[0].get("author") or {}
+        people = {c["author"]["login"] for c in t["comments"]["nodes"] if c.get("author")}
+        last = thread_last_author(t)
         if me in people and last.get("login") not in (me, None) and not is_bot(last.get("login")):
             return "Re-review"
     mine = [r for r in pr["reviews"]["nodes"] if (r.get("author") or {}).get("login") == me]
@@ -1521,7 +1523,7 @@ def my_action(pr: dict, me: str, release: bool) -> str:
     if pr["isDraft"]:
         return "Draft"
     unresolved = [t for t in pr["reviewThreads"]["nodes"] if not t["isResolved"]]
-    last_authors = [((t["last"]["nodes"] or [{}])[0].get("author") or {}).get("login") for t in unresolved]
+    last_authors = [thread_last_author(t).get("login") for t in unresolved]
     ci = check_state(pr)
     if not release and (any(a and a != me and not is_bot(a) for a in last_authors)
                         or conversation_pending(*normalize_gql(pr), me, author=me, mine=True,
