@@ -846,7 +846,8 @@ def review_json(cfg: dict, state: dict, wt: Path, sid: str, repo: str, pr: dict)
                      check_pause=False)
     except Transient as e:
         log(f"{repo}#{pr['number']} 리뷰 JSON 변환 실패: {short_error(e)}")
-        pause(cfg, state, e)
+        if not paused(state):  # 다른 작업이 이미 쉬는 중이면 쉬기를 늘리지 않는다
+            pause(cfg, state, e)
         return None
     except (Failed, subprocess.TimeoutExpired) as e:
         log(f"{repo}#{pr['number']} 리뷰 JSON 변환 실패: {short_error(e)}")
@@ -1932,8 +1933,9 @@ def poll_pass(cfg: dict, state: dict, me: str, pool: futures.Executor,
                 continue  # 리뷰 스레드가 맡고 있는 PR 은 건드리지 않는다
             ps = pr_state(state, repo, pr["number"])
             if key in asked:
-                # 바로 리뷰 요청은 리뷰 여부 · auto_review 와 상관없이 돌린다
-                if len(running) < cfg["max_parallel_reviews"]:
+                # 바로 리뷰 요청은 리뷰 여부 · auto_review 와 상관없이 돌린다.
+                # 이 바퀴 도중 리뷰 스레드가 쉬기에 들어갔으면 요청은 대기열에 둔다 (fetch · worktree 준비를 헛하지 않게)
+                if len(running) < cfg["max_parallel_reviews"] and not paused(state):
                     ps.pop("gave_up", None)
                     ps.pop("failures", None)
                     unqueue(*key)
@@ -1949,7 +1951,7 @@ def poll_pass(cfg: dict, state: dict, me: str, pool: futures.Executor,
             if should_review(cfg, me, pr, ps):
                 if time.time() - (finished_at or {}).get(key, 0) < cfg["poll_minutes"] * 60:
                     continue  # 방금 끝났는데 아직 리뷰 대상이면 보류 · 실패다. 다음 정규 바퀴에 다시 본다
-                if len(running) < cfg["max_parallel_reviews"]:
+                if len(running) < cfg["max_parallel_reviews"] and not paused(state):
                     running[key] = pool.submit(review_worker, cfg, state, repo, repo_dir, pr)
                 continue  # 자리가 없으면 다음 바퀴에 리뷰한다
             if not ps.get("session_id"):

@@ -450,6 +450,19 @@ class ReviewFlow(ReviewBase):
         self.assertTrue(self.m.paused(self.state))
         self.assertEqual(self.notes, ["pr-reviewer 쉬는 중", "app#1 리뷰 완료 (형식 확인 필요)"])
 
+    def test_쉬는_중에_JSON_변환이_실패해도_쉬기를_늘리지_않는다(self):
+        real = self.m.claude
+
+        def limited(cfg, wt, text, **k):
+            if k.get("fork"):
+                raise self.m.Transient("limit", "usage limit reached")
+            return real(cfg, wt, text, **k)
+        self.m.claude = limited
+        until = self.m.iso(self.m.now() + self.m.dt.timedelta(minutes=5))
+        self.state["paused_until"] = until
+        self.m.review_pr(self.cfg, self.state, "app", "/repo", self.pr)
+        self.assertEqual(self.state["paused_until"], until)
+
     def test_다른_작업이_쉬는_중이면_리뷰를_멈추고_실패로_세지_않는다(self):
         def paused_claude(*a, **k):
             raise self.m.Paused("쉬는 중")
@@ -669,6 +682,17 @@ class ParallelReviews(Base):
             with self.lock:
                 self.active -= 1
         self.m.pr_state(state, repo, pr["number"])["reviewed_at"] = "done"
+
+    def test_바퀴_도중_쉬기에_들어가면_새_리뷰를_넘기지_않는다(self):
+        def list_then_pause(*a):
+            self.state["paused_until"] = self.m.iso(self.m.now() + self.m.dt.timedelta(minutes=30))
+            return self.prs
+        self.m.list_open_prs = list_then_pause
+        self.m.enqueue("app", 1)
+        running = {}
+        self.m.poll_pass(self.cfg, self.state, "me", None, running)
+        self.assertEqual(running, {})
+        self.assertIn(("app", 1), self.m.queued())  # 바로 리뷰 요청은 대기열에 남는다
 
     def test_빈자리만큼_동시에_리뷰한다(self):
         barrier = threading.Barrier(2, timeout=3)
