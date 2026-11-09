@@ -50,7 +50,7 @@ class Base(unittest.TestCase):
 
 def thread(*authors: str, resolved: bool = False) -> dict:
     nodes = [{"author": {"login": a}} for a in authors]
-    return {"isResolved": resolved, "first": {"nodes": nodes[:1]}, "comments": {"nodes": nodes[-10:]}}
+    return {"isResolved": resolved, "first": {"nodes": nodes[:10]}, "comments": {"nodes": nodes[-10:]}}
 
 
 def gql_pr(**over) -> dict:
@@ -976,6 +976,16 @@ class GraphqlPages(Base):
         self.m.gh_json = gh
         self.assertEqual(len(self.m.open_prs_gql(self.cfg, "/r", "o", "n")), 1)
         self.assertEqual(self.calls, ["25", "12", "6"])
+
+    def test_시간_초과도_쪽을_줄여_다시_받는다(self):
+        def gh(cfg, args, **k):
+            self.calls.append(self.arg(args, "first"))
+            if int(self.arg(args, "first")) > 12:
+                raise self.m.Transient("network", "시간 초과 (gh, 60초)")
+            return self.page([1])
+        self.m.gh_json = gh
+        self.assertEqual(len(self.m.open_prs_gql(self.cfg, "/r", "o", "n")), 1)
+        self.assertEqual(self.calls, ["25", "12"])
 
     def test_다른_오류는_그대로_올린다(self):
         def gh(cfg, args, **k):

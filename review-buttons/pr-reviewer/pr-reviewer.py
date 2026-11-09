@@ -1450,12 +1450,13 @@ def open_in_terminal(cfg: dict, cwd: Path, command: str, title: str) -> bool:
 # ───────────────────────── 상태 계산 ─────────────────────────
 
 # 한 번에 100개를 받으면 열린 PR 이 많은 레포에서 GitHub 가 10초 제한에 걸려 502 · Resource limits 로 끊는다.
-# 25개씩 나눠 받고(큰 레포에서 4초 안팎), 최근에 바뀐 PR 부터 받는다
+# 25개씩 나눠 받고(큰 레포에서 4초 안팎), 최근에 연 PR 부터 받는다.
+# 갱신순으로 받으면 쪽을 받는 사이 갱신된 PR 이 앞쪽으로 옮겨 가 이번 조회에서 빠진다
 GRAPHQL_PAGE = 25
 GRAPHQL = """
 query($owner: String!, $name: String!, $first: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
-    pullRequests(states: OPEN, first: $first, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}) {
+    pullRequests(states: OPEN, first: $first, after: $after, orderBy: {field: CREATED_AT, direction: DESC}) {
       pageInfo { hasNextPage endCursor }
       nodes {
         number title url isDraft headRefOid headRefName isCrossRepository author { login } reviewDecision mergeable
@@ -1466,7 +1467,7 @@ query($owner: String!, $name: String!, $first: Int!, $after: String) {
         reviewThreads(last: 50) {
           nodes {
             isResolved
-            first: comments(first: 1) { nodes { author { login } } }
+            first: comments(first: 10) { nodes { author { login } } }
             comments(last: 10) { nodes { author { login } } }
           }
         }
@@ -1498,7 +1499,7 @@ def team_action(pr: dict, me: str, ps: dict, repo_seen: bool = True) -> str:
     for t in threads:
         if t["isResolved"]:
             continue
-        # 스레드를 연 사람과 최근 10개 글쓴이. 중간에만 끼었던 긴 스레드는 놓칠 수 있다
+        # 처음 10개와 최근 10개 글쓴이. 21번째 글부터 중간에만 끼었던 긴 스레드는 놓칠 수 있다
         people = {c["author"]["login"] for c in t["first"]["nodes"] + t["comments"]["nodes"] if c.get("author")}
         last = thread_last_author(t)
         if me in people and last.get("login") not in (me, None) and not is_bot(last.get("login")):
@@ -1666,12 +1667,12 @@ def open_prs_gql(cfg: dict, repo_dir: str, owner: str, name: str) -> list[dict]:
         try:
             data = gh_json(cfg, args, cwd=repo_dir)
         except (Failed, Transient) as e:
-            if size > 5 and re.search(r"\b50[234]\b|resource limits", str(e), re.I):
+            if size > 5 and re.search(r"\b50[234]\b|resource limits|시간 초과", str(e), re.I):
                 size //= 2
                 continue
             raise
         page = data["data"]["repository"]["pullRequests"]
-        # 받는 사이 PR 이 갱신돼 순서가 밀리면 같은 PR 이 두 번 올 수 있다
+        # 받는 사이 새 PR 이 열려 순서가 밀리면 같은 PR 이 두 번 올 수 있다
         nodes += [n for n in page["nodes"] if n["number"] not in seen]
         seen.update(n["number"] for n in page["nodes"])
         info = page.get("pageInfo") or {}
