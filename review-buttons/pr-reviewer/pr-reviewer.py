@@ -1448,10 +1448,14 @@ def open_in_terminal(cfg: dict, cwd: Path, command: str, title: str) -> bool:
 
 # ───────────────────────── 상태 계산 ─────────────────────────
 
+# 한 번에 100개를 받으면 열린 PR 이 많은 레포에서 GitHub 가 10초 제한에 걸려 502 · Resource limits 로 끊는다.
+# 25개씩 나눠 받고(큰 레포에서 4초 안팎), 최근에 바뀐 PR 부터 받는다
+GRAPHQL_PAGE = 25
 GRAPHQL = """
-query($owner: String!, $name: String!) {
+query($owner: String!, $name: String!, $first: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
-    pullRequests(states: OPEN, first: 100) {
+    pullRequests(states: OPEN, first: $first, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      pageInfo { hasNextPage endCursor }
       nodes {
         number title url isDraft headRefOid headRefName isCrossRepository author { login } reviewDecision mergeable
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
@@ -1648,6 +1652,34 @@ def issue_of(cfg: dict, branch: str, title: str) -> tuple[str | None, str | None
     return None, None
 
 
+def open_prs_gql(cfg: dict, repo_dir: str, owner: str, name: str) -> list[dict]:
+    """열린 PR 을 GRAPHQL_PAGE 개씩 받는다 (최대 PR_LIST_LIMIT 개). 서버가 무거워 끊으면 쪽을 줄여 다시 받는다."""
+    nodes: list[dict] = []
+    seen: set[int] = set()
+    after, size = None, GRAPHQL_PAGE
+    while len(nodes) < PR_LIST_LIMIT:
+        args = ["api", "graphql", "-f", f"query={GRAPHQL}", "-f", f"owner={owner}", "-f", f"name={name}",
+                "-F", f"first={min(size, PR_LIST_LIMIT - len(nodes))}"]
+        if after:
+            args += ["-f", f"after={after}"]
+        try:
+            data = gh_json(cfg, args, cwd=repo_dir)
+        except (Failed, Transient) as e:
+            if size > 5 and re.search(r"\b50[234]\b|resource limits", str(e), re.I):
+                size //= 2
+                continue
+            raise
+        page = data["data"]["repository"]["pullRequests"]
+        # 받는 사이 PR 이 갱신돼 순서가 밀리면 같은 PR 이 두 번 올 수 있다
+        nodes += [n for n in page["nodes"] if n["number"] not in seen]
+        seen.update(n["number"] for n in page["nodes"])
+        info = page.get("pageInfo") or {}
+        if not info.get("hasNextPage"):
+            break
+        after = info["endCursor"]
+    return nodes
+
+
 def build_status(cfg: dict, state: dict) -> dict:
     state = snapshot(state)  # 리뷰 스레드가 고치는 중이어도 한 시점의 값으로 계산한다
     _cache.clear()
@@ -1661,8 +1693,7 @@ def build_status(cfg: dict, state: dict) -> dict:
             owner, name = repo_slug_cached(cfg, repo_dir).split("/")
             git_dirs[repo] = git(cfg, "rev-parse", "--path-format=absolute", "--git-common-dir",
                                  cwd=repo_dir).stdout.strip()
-            data = gh_json(cfg, ["api", "graphql", "-f", f"query={GRAPHQL}", "-f", f"owner={owner}",
-                                 "-f", f"name={name}"], cwd=repo_dir)
+            nodes = open_prs_gql(cfg, repo_dir, owner, name)
         except (Failed, Transient, subprocess.TimeoutExpired) as e:
             errors.append(f"{repo}: {short_error(e)}")
             failed.append(repo)
@@ -1675,7 +1706,7 @@ def build_status(cfg: dict, state: dict) -> dict:
                 checked_at[repo] = prev["checked_at"][repo]  # 남겨 둔 줄이 언제 값인지 띠에 보인다
             continue
         checked_at[repo] = iso()
-        for pr in data["data"]["repository"]["pullRequests"]["nodes"]:
+        for pr in nodes:
             author = author_of(pr)
             ps = state.get("repos", {}).get(repo, {}).get("prs", {}).get(str(pr["number"]), {})
             pr_like = {"title": pr["title"], "author": {"login": author}}

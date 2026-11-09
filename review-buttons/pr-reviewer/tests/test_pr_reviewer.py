@@ -918,6 +918,49 @@ class Version(Base):
         self.assertEqual(self.m.VERSION, json.loads(manifest.read_text())["version"])
 
 
+class GraphqlPages(Base):
+    def setUp(self):
+        super().setUp()
+        self.cfg = self.config(repos={})
+        self.calls = []
+
+    def page(self, numbers, after=None):
+        return {"data": {"repository": {"pullRequests": {
+            "nodes": [{"number": n} for n in numbers],
+            "pageInfo": {"hasNextPage": after is not None, "endCursor": after}}}}}
+
+    def arg(self, args, key):
+        return next((a.split("=", 1)[1] for a in args if a.startswith(key + "=")), None)
+
+    def test_쪽을_이어_받고_겹친_PR_은_한_번만_넣는다(self):
+        pages = {None: self.page([1, 2], "c1"), "c1": self.page([2, 3])}
+
+        def gh(cfg, args, **k):
+            self.calls.append(args)
+            return pages[self.arg(args, "after")]
+        self.m.gh_json = gh
+        nodes = self.m.open_prs_gql(self.cfg, "/r", "o", "n")
+        self.assertEqual([n["number"] for n in nodes], [1, 2, 3])
+        self.assertEqual(self.arg(self.calls[0], "first"), str(self.m.GRAPHQL_PAGE))
+
+    def test_서버가_무거워_끊으면_쪽을_줄여_다시_받는다(self):
+        def gh(cfg, args, **k):
+            self.calls.append(self.arg(args, "first"))
+            if int(self.arg(args, "first")) > 10:
+                raise self.m.Failed("gh api 실패: Resource limits for this query exceeded.")
+            return self.page([1])
+        self.m.gh_json = gh
+        self.assertEqual(len(self.m.open_prs_gql(self.cfg, "/r", "o", "n")), 1)
+        self.assertEqual(self.calls, ["25", "12", "6"])
+
+    def test_다른_오류는_그대로_올린다(self):
+        def gh(cfg, args, **k):
+            raise self.m.Transient("network", "could not resolve host")
+        self.m.gh_json = gh
+        with self.assertRaises(self.m.Transient):
+            self.m.open_prs_gql(self.cfg, "/r", "o", "n")
+
+
 class FailedRepoStatus(Base):
     def test_조회에_실패한_레포는_직전_줄과_그_조회_시각을_남긴다(self):
         m = self.m
