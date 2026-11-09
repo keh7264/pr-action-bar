@@ -191,6 +191,16 @@ function groupByAction(items: Pr[]): [string, Pr[]][] {
   return [...groups.entries()]
 }
 
+// 오늘이 아닌 시각은 날짜도 붙인다. 어제 18:05 값이 오늘 18:05 처럼 보이지 않게
+function stamp(iso: string) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}:\d{2})/.exec(iso)
+  if (!m) return '--:--'
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const today = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+  return `${m[1]}-${m[2]}-${m[3]}` === today ? m[4] : `${Number(m[2])}/${Number(m[3])} ${m[4]}`
+}
+
 function hhmm(iso: string | null) {
   const m = iso ? /T(\d{2}:\d{2})/.exec(iso) : null
   return m ? m[1] : '--:--'
@@ -239,7 +249,7 @@ export const register: Register = on => {
           {failedRepos.length > 0 ? (
             // 조회에 실패한 레포는 직전 줄을 남겨 둔다. 그 줄이 언제 값인지 같이 적는다
             <Text color="warning">{`조회 실패: ${failedRepos
-              .map(r => (checkedAt[r] ? `${r} (${hhmm(checkedAt[r])} 기준)` : r))
+              .map(r => (checkedAt[r] ? `${r} (${stamp(checkedAt[r])} 기준)` : r))
               .join(', ')}`}</Text>
           ) : null}
           {pluginVersion && updatedAt && version !== pluginVersion ? (

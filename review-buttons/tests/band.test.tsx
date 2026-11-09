@@ -148,7 +148,18 @@ test('조회 실패 경고에 남겨 둔 줄의 조회 시각을 적는다', asy
   const status = { ...STATUS_JSON, failed_repos: ['app'], checked_at: { app: '2026-01-01T05:20:00Z' } }
   await setup($, on, { files: { [STATUS]: JSON.stringify(status) } })
   const ui = await mount($)
-  expect(await ui.find({ type: 'Text', text: /조회 실패: app \(\d\d:\d\d 기준\)/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /조회 실패: app \(1\/1 \d\d:\d\d 기준\)/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('오늘 조회한 값이면 시각만 적는다', async ($, on) => {
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const today = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T09:30:00+09:00`
+  const status = { ...STATUS_JSON, failed_repos: ['app'], checked_at: { app: today } }
+  await setup($, on, { files: { [STATUS]: JSON.stringify(status) } })
+  const ui = await mount($)
+  expect(await ui.find({ type: 'Text', text: /조회 실패: app \(09:30 기준\)/ })).toBeDefined()
   await ui.unmount()
 })
 
